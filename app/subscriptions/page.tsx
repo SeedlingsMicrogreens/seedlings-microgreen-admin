@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { createSubscription, updateSubscriptionStatus } from "@/lib/subscriptionService";
+import { confirmAction } from "@/lib/alerts";
 import { listCollection } from "@/lib/firestore";
 import type { Product } from "@/types/catalog";
 import type { Customer } from "@/types/customer";
@@ -66,7 +67,7 @@ export default function SubscriptionsPage() {
 
   async function changeStatus(sub: Subscription, next: SubscriptionStatus) {
     if (!user) return;
-    if (next === "cancelled" && !window.confirm("Cancel this subscription?")) return;
+    if (next === "cancelled" && !(await confirmAction({title:"Cancel this subscription?",text:"This will stop the active subscription.",confirmText:"Yes, cancel"}))) return;
     try {
       await updateSubscriptionStatus(sub, next, user.uid, user.email ?? undefined);
       setSelected({ ...sub, status: next });
@@ -190,7 +191,7 @@ function CreateSubscription({ customers, products, uid, email, onCancel, onCreat
       <div className="col-lg-5"><div className="card border"><div className="card-header"><strong>Subscription Preview</strong></div><div className="card-body">
         {!selectedOption ? <div className="text-muted">Select a product and selling option to preview the subscription.</div> : <>
           <div className="mb-3"><strong>{product?.name}</strong><div className="text-muted">{packLabel(selectedOption.weightGrams)} × {quantity}</div></div>
-          <div className="row g-3 small"><div className="col-6"><span className="text-muted">Per delivery</span><strong className="d-block">₹{(selectedOption.price * quantity).toFixed(2)}</strong></div><div className="col-6"><span className="text-muted">Grams / delivery</span><strong className="d-block">{(selectedOption.weightGrams * quantity).toLocaleString()} g</strong></div><div className="col-6"><span className="text-muted">Frequency</span><strong className="d-block">{frequencyLabel(frequency)}</strong></div><div className="col-6"><span className="text-muted">Deliveries</span><strong className="d-block">{total == null ? "Ongoing" : total}</strong></div><div className="col-6"><span className="text-muted">First delivery</span><strong className="d-block">{dateLabel(firstDelivery)}</strong></div><div className="col-6"><span className="text-muted">End date</span><strong className="d-block">{dateLabel(endDate)}</strong></div></div>
+          <div className="row g-3 small"><div className="col-6"><span className="text-muted">Per delivery</span><strong className="d-block">₹{(selectedOption.price * quantity).toFixed(2)}</strong></div><div className="col-6"><span className="text-muted">Grams / delivery</span><strong className="d-block">{(selectedOption.weightGrams * quantity).toLocaleString()} gms</strong></div><div className="col-6"><span className="text-muted">Frequency</span><strong className="d-block">{frequencyLabel(frequency)}</strong></div><div className="col-6"><span className="text-muted">Deliveries</span><strong className="d-block">{total == null ? "Ongoing" : total}</strong></div><div className="col-6"><span className="text-muted">First delivery</span><strong className="d-block">{dateLabel(firstDelivery)}</strong></div><div className="col-6"><span className="text-muted">End date</span><strong className="d-block">{dateLabel(endDate)}</strong></div></div>
           <div className="alert alert-light border mt-3 mb-0 small">This subscription will create normal orders for its deliveries. It does not directly deduct inventory.</div>
         </>}
       </div></div></div>
@@ -210,7 +211,7 @@ function SubscriptionDetails({ subscription, onClose, onStatus }: {
       <div className="modal-header"><div><h2 className="modal-title h5 mb-1">{subscription.subscriptionNumber}</h2><div className="small text-muted">{subscription.customerName} • {subscription.customerMobile || "No mobile"}</div></div><button className="btn-close" aria-label="Close" onClick={onClose}/></div>
       <div className="modal-body">
         <div className="row g-3">
-          <div className="col-md-6"><div className="border rounded p-3 h-100"><h3 className="h6">Purchase</h3><dl className="row mb-0"><dt className="col-6">Product</dt><dd className="col-6">{subscription.productName}</dd><dt className="col-6">Selling option</dt><dd className="col-6">{subscription.sellingOptionLabel}</dd><dt className="col-6">Quantity</dt><dd className="col-6">{subscription.quantity} pack(s)</dd><dt className="col-6">Grams / delivery</dt><dd className="col-6">{grams.toLocaleString()} g</dd><dt className="col-6">Price / delivery</dt><dd className="col-6">₹{perDelivery.toFixed(2)}</dd></dl></div></div>
+          <div className="col-md-6"><div className="border rounded p-3 h-100"><h3 className="h6">Purchase</h3><dl className="row mb-0"><dt className="col-6">Product</dt><dd className="col-6">{subscription.productName}</dd><dt className="col-6">Selling option</dt><dd className="col-6">{subscription.sellingOptionLabel}</dd><dt className="col-6">Quantity</dt><dd className="col-6">{subscription.quantity} pack(s)</dd><dt className="col-6">Grams / delivery</dt><dd className="col-6">{grams.toLocaleString()} gms</dd><dt className="col-6">Price / delivery</dt><dd className="col-6">₹{perDelivery.toFixed(2)}</dd></dl></div></div>
           <div className="col-md-6"><div className="border rounded p-3 h-100"><h3 className="h6">Schedule</h3><dl className="row mb-0"><dt className="col-6">Frequency</dt><dd className="col-6">{frequencyLabel(subscription.frequency)}</dd><dt className="col-6">Delivery day</dt><dd className="col-6">{["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][subscription.deliveryDay] ?? "Saturday"}</dd><dt className="col-6">Start</dt><dd className="col-6">{dateLabel(subscription.startDate)}</dd><dt className="col-6">Next delivery</dt><dd className="col-6">{dateLabel(subscription.nextDeliveryDate)}</dd><dt className="col-6">Deliveries</dt><dd className="col-6">{subscription.totalDeliveries ? `${subscription.deliveriesGenerated} / ${subscription.totalDeliveries}` : `${subscription.deliveriesGenerated} / ongoing`}</dd><dt className="col-6">End</dt><dd className="col-6">{dateLabel(subscription.endDate)}</dd></dl></div></div>
         </div>
         <div className="alert alert-info mt-3 mb-0 small">Future subscription demand is available to the Forecasting phase. Each occurrence should become a normal order before fulfilment.</div>

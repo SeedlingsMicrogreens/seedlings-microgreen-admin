@@ -7,14 +7,21 @@ export function validateSalesProduct(input: {
   sku?: string;
   type: SalesProductType;
   components: SalesProductComponent[];
+  mrp: number;
   sellingPrice: number;
   oneTimePurchase: boolean;
   subscriptionPurchase: boolean;
 }) {
   if (!input.name.trim()) throw new Error("Sales product name is required.");
   if (input.sku !== undefined && !input.sku.trim()) throw new Error("SKU cannot be blank.");
-  if (!Number.isFinite(input.sellingPrice) || input.sellingPrice < 0) {
-    throw new Error("Selling price cannot be negative.");
+  if (!Number.isFinite(input.mrp) || input.mrp <= 0) {
+    throw new Error("MRP must be greater than zero.");
+  }
+  if (!Number.isFinite(input.sellingPrice) || input.sellingPrice <= 0) {
+    throw new Error("Selling price must be greater than zero.");
+  }
+  if (input.sellingPrice > input.mrp) {
+    throw new Error("Selling price cannot be greater than MRP.");
   }
   if (!input.oneTimePurchase && !input.subscriptionPurchase) {
     throw new Error("Select at least one purchase option.");

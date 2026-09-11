@@ -23,7 +23,7 @@ export function validatePackingLine(line: PackingLine, salableProduct: SalesProd
     throw new Error(`${salableProduct.name} has an invalid component quantity.`);
   }
   if (recipeGrams !== line.boxGrams) {
-    throw new Error(`${salableProduct.name}: Box Gms (${line.boxGrams}g) must match its component recipe total (${recipeGrams}g).`);
+    throw new Error(`${salableProduct.name}: Box Gms (${line.boxGrams} gms) must match its component recipe total (${recipeGrams} gms).`);
   }
 }
 
@@ -104,7 +104,7 @@ export async function packSalableProducts(
       if (!state) throw new Error("A production product required by the packing worksheet is missing.");
       const available = Number(state.product.stockGrams ?? state.product.stock ?? 0);
       if (available < required) {
-        throw new Error(`${state.product.name}: ${available.toLocaleString()} g available, ${required.toLocaleString()} g required. Nothing was packed.`);
+        throw new Error(`${state.product.name}: ${available.toLocaleString()} gms available, ${required.toLocaleString()} gms required. Nothing was packed.`);
       }
       return { productId, ...state, available, required };
     });

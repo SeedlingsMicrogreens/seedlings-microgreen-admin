@@ -12,7 +12,7 @@ export const ORDER_STATUSES = [
 
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
-export type PaymentStatus = "pending" | "paid" | "failed" | "refunded";
+export type PaymentStatus = "pending" | "partially_paid" | "paid" | "failed" | "refunded";
 
 export type OrderItem = {
   /** Salable Product referenced by this order item. */
@@ -44,6 +44,18 @@ export type OrderAddress = {
   pincode?: string;
 };
 
+export type PaymentTransaction = {
+  id: string;
+  amount: number;
+  paymentMethod?: string;
+  transactionId?: string;
+  paymentReceiptUrl?: string;
+  paymentReceiptPath?: string;
+  recordedAt?: unknown;
+  recordedByUid?: string;
+  recordedByEmail?: string;
+};
+
 export type Order = {
   id: string;
   orderNumber?: string;
@@ -59,8 +71,13 @@ export type Order = {
   paymentStatus: PaymentStatus;
   paymentMethod?: string;
   transactionId?: string;
+  paymentReceiptUrl?: string;
+  paymentReceiptPath?: string;
+  paymentRecordedByUid?: string;
+  paymentRecordedByEmail?: string;
   paymentDate?: unknown;
   paidAmount?: number;
+  paymentTransactions?: PaymentTransaction[];
   refundAmount?: number;
   refundedAt?: unknown;
   refundedByUid?: string;
@@ -86,6 +103,13 @@ export type Order = {
   statusHistory?: OrderStatusHistory[];
   createdAt?: unknown;
   updatedAt?: unknown;
+  /** Customer selected the contact-me path during an availability shortage. */
+  requiresCustomerContact?: boolean;
+  availabilityRequestedGrams?: number;
+  availabilityAvailableGrams?: number;
+  availabilityShortageGrams?: number;
+  carryForwardQuantityGrams?: number;
+  availabilityDecision?: "continue" | "contact" | string;
 };
 
 export type OrderStatusHistory = {

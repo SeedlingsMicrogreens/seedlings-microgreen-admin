@@ -16,7 +16,7 @@ const ranges = [
 ];
 
 function dateString(d: Date) { return d.toISOString().slice(0,10); }
-function grams(v: number) { return `${Math.round(v).toLocaleString()} g`; }
+function grams(v: number) { return `${Math.round(v).toLocaleString()} gms`; }
 function pct(v: number | null) { return v == null ? "—" : `${v.toFixed(1)}%`; }
 
 export default function ProductionAnalyticsPage() {
@@ -92,7 +92,7 @@ export default function ProductionAnalyticsPage() {
         </ul></div>
 
         {tab==="products"?<div className="table-responsive"><table className="table table-hover align-middle mb-0"><thead><tr><th>Product</th><th>Batches</th><th>Trays</th><th>Expected usable</th><th>Actual harvested</th><th>Actual usable</th><th>Actual loss</th><th>Yield</th><th>Loss rate</th><th>Avg usable / tray</th></tr></thead><tbody>
-          {filteredProducts.map(r=><tr key={r.productId}><td><strong>{r.productName}</strong></td><td>{r.completedBatches}/{r.batches}</td><td>{r.trays}</td><td>{grams(r.expectedUsableGrams)}</td><td>{grams(r.actualHarvestedGrams)}</td><td>{grams(r.actualUsableGrams)}</td><td>{grams(r.actualLossGrams)}</td><td>{pct(r.yieldAchievementPercent)}</td><td>{pct(r.lossRatePercent)}</td><td>{r.avgActualUsablePerTrayGrams==null?"—":`${r.avgActualUsablePerTrayGrams.toFixed(0)} g`}</td></tr>)}
+          {filteredProducts.map(r=><tr key={r.productId}><td><strong>{r.productName}</strong></td><td>{r.completedBatches}/{r.batches}</td><td>{r.trays}</td><td>{grams(r.expectedUsableGrams)}</td><td>{grams(r.actualHarvestedGrams)}</td><td>{grams(r.actualUsableGrams)}</td><td>{grams(r.actualLossGrams)}</td><td>{pct(r.yieldAchievementPercent)}</td><td>{pct(r.lossRatePercent)}</td><td>{r.avgActualUsablePerTrayGrams==null?"—":`${r.avgActualUsablePerTrayGrams.toFixed(0)} gms`}</td></tr>)}
           {!filteredProducts.length&&!loading&&<tr><td colSpan={10} className="text-center text-muted py-5">No production data for this period.</td></tr>}
           {loading&&<tr><td colSpan={10} className="text-center py-5"><span className="spinner-border spinner-border-sm me-2"/>Loading...</td></tr>}
         </tbody></table></div>:<div className="table-responsive"><table className="table table-hover align-middle mb-0"><thead><tr><th>Batch</th><th>Started</th><th>Location</th><th>Products</th><th>Trays</th><th>Expected usable</th><th>Actual usable</th><th>Loss</th><th>Completion</th><th>Yield</th></tr></thead><tbody>

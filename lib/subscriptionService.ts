@@ -50,7 +50,7 @@ export function createSubscriptionPayload(args: {
     productId: args.product.id,
     productName: args.product.name,
     sellingOptionId: option.id,
-    sellingOptionLabel: option.weightGrams >= 1000 && option.weightGrams % 1000 === 0 ? `${option.weightGrams / 1000}kg box` : `${option.weightGrams}g box`,
+    sellingOptionLabel: option.weightGrams >= 1000 && option.weightGrams % 1000 === 0 ? `${option.weightGrams / 1000}kg box` : `${option.weightGrams} gms box`,
     weightGrams: option.weightGrams,
     unitPrice: option.price,
     quantity: args.quantity,

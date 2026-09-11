@@ -13,8 +13,8 @@ export async function assignOrderToDelivery(
   if (deliveryUser.status !== "active") {
     throw new Error("Only active delivery users can receive assignments.");
   }
-  if (!["ready_for_handover", "handed_to_delivery"].includes(order.status)) {
-    throw new Error("Order must be ready for handover before assigning delivery.");
+  if (["delivered", "cancelled"].includes(order.status)) {
+    throw new Error("Delivered or cancelled orders cannot be handed over for delivery.");
   }
 
   const orderRef = doc(db, "orders", order.id);
@@ -25,12 +25,12 @@ export async function assignOrderToDelivery(
     if (!snapshot.exists()) throw new Error("Order no longer exists.");
 
     const current = snapshot.data() as Order;
-    if (!["ready_for_handover", "handed_to_delivery"].includes(current.status)) {
-      throw new Error("Order status changed. Refresh and try again.");
+    if (["delivered", "cancelled"].includes(current.status)) {
+      throw new Error("Order status changed. Refresh and retry.");
     }
 
     const history = Array.isArray(current.statusHistory) ? current.statusHistory : [];
-    const nextStatus: OrderStatus = "handed_to_delivery";
+    const nextStatus: OrderStatus = "out_for_delivery";
 
     transaction.update(orderRef, {
       status: nextStatus,
@@ -56,7 +56,8 @@ export async function assignOrderToDelivery(
       deliveryUserId: deliveryUser.id,
       deliveryUserAuthUid: deliveryUser.authUid,
       deliveryUserName: deliveryUser.name,
-      status: "assigned",
+      deliveryUserMobile: deliveryUser.mobileNumber,
+      status: "out_for_delivery",
       assignedByUid: adminUid,
       assignedByEmail: adminEmail ?? "",
       assignedAt: serverTimestamp(),

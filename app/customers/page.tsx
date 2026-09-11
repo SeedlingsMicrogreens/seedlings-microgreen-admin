@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { listCollection, updateRecord } from "@/lib/firestore";
 import type { Customer, CustomerStatus } from "@/types/customer";
+import { formatAddress } from "@/lib/address";
+import {confirmAction} from "@/lib/alerts";
 
 function customerName(customer: Customer) {
   return customer.name?.trim() || "Unnamed customer";
@@ -41,7 +43,7 @@ export default function CustomersPage() {
 
   async function changeStatus(customer: Customer, status: CustomerStatus) {
     const action = status === "blocked" ? "block" : "activate";
-    if (!window.confirm(`Are you sure you want to ${action} ${customerName(customer)}?`)) return;
+    if (!(await confirmAction({title:`${action === "block" ? "Block" : "Activate"} ${customerName(customer)}?`,text:`This will ${action} this customer account.`,confirmText:action === "block" ? "Yes, block" : "Yes, activate"}))) return;
     try {
       await updateRecord("customers", customer.id, { status });
       const updated = { ...customer, status };
@@ -142,7 +144,7 @@ export default function CustomersPage() {
                       <div className="border rounded p-3 h-100">
                         <h3 className="h6">Addresses</h3>
                         {selected.addresses?.length ? (
-                          <div className="small">{selected.addresses.map((address, i) => <div className="border-bottom py-2" key={i}>{typeof address === "string" ? address : JSON.stringify(address)}</div>)}</div>
+                          <div className="small">{selected.addresses.map((address, i) => <div className="border-bottom py-2" key={i}>{formatAddress(address)}</div>)}</div>
                         ) : <div className="text-muted">No saved addresses.</div>}
                       </div>
                     </div>

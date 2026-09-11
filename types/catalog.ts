@@ -61,7 +61,7 @@ export type ProductSellingOption = {
   active: boolean;
 };
 
-export type InventoryAdjustmentType = "harvest" | "legacy" | "packaging" | "receive" | "add" | "remove";
+export type InventoryAdjustmentType = "harvest" | "legacy" | "packaging" | "receive" | "add" | "remove" | "batch_stock";
 
 export type InventoryAdjustment = {
   id: string;

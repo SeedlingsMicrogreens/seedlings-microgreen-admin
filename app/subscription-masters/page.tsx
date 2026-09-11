@@ -9,6 +9,7 @@ import type {SubscriptionPlan,SubscriptionFrequency} from "@/types/subscriptionP
 import {SUBSCRIPTION_FREQUENCIES,subscriptionFrequencyLabel} from "@/types/subscriptionPlan";
 import type {DeliveryCharge} from "@/types/deliveryCharge";
 import {deliveryScopeLabel} from "@/types/deliveryCharge";
+import {confirmAction,showSuccess} from "@/lib/alerts";
 
 function money(v:number){return `₹${Number(v||0).toFixed(2)}`;}
 const emptyPlan={name:"",frequency:"monthly" as SubscriptionFrequency,deliveriesPerTerm:4,price:0,deliveryChargeMode:"per_delivery" as const,deliveryCharge:0,active:true,description:""};
@@ -22,8 +23,8 @@ export default function SubscriptionMastersPage(){
  useEffect(()=>{void load()},[]);
  async function togglePlan(x:SubscriptionPlan){try{await updateSubscriptionPlan(x.id,{active:!x.active});await load()}catch(e){setError(e instanceof Error?e.message:"Unable to update plan.")}}
  async function toggleCharge(x:DeliveryCharge){try{await updateDeliveryCharge(x.id,{active:!x.active});await load()}catch(e){setError(e instanceof Error?e.message:"Unable to update delivery charge.")}}
- async function removePlan(x:SubscriptionPlan){if(!confirm(`Delete ${x.name}?`))return;try{await deleteSubscriptionPlan(x.id);await load()}catch(e){setError(e instanceof Error?e.message:"Unable to delete plan.")}}
- async function removeCharge(x:DeliveryCharge){if(!confirm(`Delete ${x.name}?`))return;try{await deleteDeliveryCharge(x.id);await load()}catch(e){setError(e instanceof Error?e.message:"Unable to delete delivery charge.")}}
+ async function removePlan(x:SubscriptionPlan){if(!(await confirmAction({title:`Delete ${x.name}?`,text:"This action cannot be undone.",confirmText:"Yes, delete"})))return;try{await deleteSubscriptionPlan(x.id);await load();await showSuccess("Subscription plan deleted")}catch(e){setError(e instanceof Error?e.message:"Unable to delete plan.")}}
+ async function removeCharge(x:DeliveryCharge){if(!(await confirmAction({title:`Delete ${x.name}?`,text:"This action cannot be undone.",confirmText:"Yes, delete"})))return;try{await deleteDeliveryCharge(x.id);await load();await showSuccess("Delivery charge deleted")}catch(e){setError(e instanceof Error?e.message:"Unable to delete delivery charge.")}}
  return <AdminPage><div className="container-fluid py-3">
   <div className="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-3"><div><h1 className="h3 seedlings-brand mb-1">Subscription & Delivery Masters</h1><p className="text-muted mb-0">Define subscription plans and delivery charges before creating customer subscriptions or orders.</p></div><button className="btn btn-outline-secondary" onClick={()=>void load()}><i className="bi bi-arrow-clockwise"/></button></div>
   {error&&<div className="alert alert-danger">{error}</div>}

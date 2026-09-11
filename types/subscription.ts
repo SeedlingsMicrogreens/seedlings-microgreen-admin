@@ -42,6 +42,13 @@ export type Subscription = {
 
   deliveryAddress?: Record<string, unknown>;
 
+  requiresCustomerContact?: boolean;
+  availabilityRequestedGrams?: number;
+  availabilityAvailableGrams?: number;
+  availabilityShortageGrams?: number;
+  carryForwardQuantityGrams?: number;
+  availabilityDecision?: "continue" | "contact" | string;
+
   status: SubscriptionStatus;
   notes?: string;
 

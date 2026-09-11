@@ -62,13 +62,13 @@ export default function BusinessReportsPage(){
     <div className="row g-3 mb-3">
       <div className="col-lg-8"><div className="card h-100"><div className="card-header"><h3 className="card-title mb-0">Sales & Product Performance</h3></div><div className="table-responsive"><table className="table table-hover align-middle mb-0"><thead><tr><th>Product</th><th>Orders</th><th>Packs sold</th><th>Sales</th></tr></thead><tbody>{top.map(r=><tr key={r.productId}><td><strong>{r.productName}</strong></td><td>{r.orders}</td><td>{r.quantity}</td><td>{money(r.sales)}</td></tr>)}{!top.length&&!loading&&<tr><td colSpan={4} className="text-center text-muted py-4">No sales in this period.</td></tr>}</tbody></table></div></div></div>
       <div className="col-lg-4"><div className="card h-100"><div className="card-header"><h3 className="card-title mb-0">Business Snapshot</h3></div><div className="card-body">
-        <Metric label="Stock" value={`${metrics.stockGrams.toLocaleString()} g`}/>
+        <Metric label="Stock" value={`${metrics.stockGrams.toLocaleString()} gms`}/>
         <Metric label="Low-stock products" value={metrics.lowStockProducts} warn={metrics.lowStockProducts>0}/>
         <Metric label="Subscription value / delivery" value={money(metrics.subscriptionValuePerDelivery)}/>
         <Metric label="Growing batches" value={metrics.growingBatches}/>
         <Metric label="Growing trays" value={metrics.growingTrays}/>
-        <Metric label="Expected usable growing" value={`${metrics.expectedUsableGrowingGrams.toLocaleString()} g`}/>
-        <Metric label="Actual loss" value={`${metrics.actualLossGrams.toLocaleString()} g`} warn={metrics.actualLossGrams>0}/>
+        <Metric label="Expected usable growing" value={`${metrics.expectedUsableGrowingGrams.toLocaleString()} gms`}/>
+        <Metric label="Actual loss" value={`${metrics.actualLossGrams.toLocaleString()} gms`} warn={metrics.actualLossGrams>0}/>
       </div></div></div>
     </div>
 

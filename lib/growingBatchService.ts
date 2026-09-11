@@ -77,3 +77,139 @@ export async function harvestGrowingBatchItem(
   });
   await auditEvent("harvest", "growingBatches", batch.id, `Harvested ${batchItem.productName}: ${netUsableYieldGrams} g usable`);
 }
+
+
+/**
+ * Reconcile a harvested batch into batch-wise stock.
+ * Harvest already adds the actual usable grams to the product's aggregate stock.
+ * This operation therefore applies only the difference between the harvested
+ * quantity and the admin's final batch stock quantity, then marks the batch
+ * as adjusted so it no longer appears in the Inventory batch selector.
+ */
+export async function adjustGrowingBatchStock(
+  batch: GrowingBatch,
+  quantities: Record<string, number>,
+  uid: string,
+  email?: string,
+) {
+  if (batch.stockAdjusted) throw new Error("This batch has already been adjusted in batch-wise stock.");
+  if (batch.delivered) throw new Error("This batch has already been marked as delivered.");
+
+  const selectedItems = (batch.items ?? []).filter(item => item.status === "harvested" || item.status === "failed");
+  if (!selectedItems.length) throw new Error("This batch has no harvested items to add to batch-wise stock.");
+
+  for (const item of selectedItems) {
+    const value = Number(quantities[item.id] ?? 0);
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error(`Stock quantity for ${item.productName} must be a whole number of grams and cannot be negative.`);
+    }
+  }
+
+  const batchRef = doc(db, "growingBatches", batch.id);
+  await runTransaction(db, async transaction => {
+    const batchSnap = await transaction.get(batchRef);
+    if (!batchSnap.exists()) throw new Error("Growing batch no longer exists.");
+    const latest = batchSnap.data() as GrowingBatch;
+    if (latest.stockAdjusted) throw new Error("This batch was already adjusted. Refresh and try again.");
+    if (latest.delivered) throw new Error("This batch has already been marked as delivered.");
+
+    const latestItems = latest.items ?? [];
+    const productIds = [...new Set(selectedItems.map(item => item.productId))];
+    const productRefs = productIds.map(id => doc(db, "products", id));
+    const productSnaps = await Promise.all(productRefs.map(ref => transaction.get(ref)));
+    if (productSnaps.some(snap => !snap.exists())) throw new Error("One or more production products no longer exist. Refresh and retry.");
+
+    const productStates = new Map(productIds.map((id, index) => [id, {
+      ref: productRefs[index],
+      product: productSnaps[index].data() as Product,
+      previous: Number(productSnaps[index].data()?.stockGrams ?? productSnaps[index].data()?.stock ?? 0),
+    }]));
+
+    const updatedItems = latestItems.map(item => {
+      if (!selectedItems.some(selected => selected.id === item.id)) return item;
+      const desired = Number(quantities[item.id] ?? 0);
+      return { ...item, batchStockGrams: desired };
+    });
+
+    for (const item of selectedItems) {
+      const state = productStates.get(item.productId);
+      if (!state) throw new Error(`Product ${item.productName} is missing.`);
+      const harvestedContribution = Number(item.actualYieldGrams ?? 0);
+      const desiredContribution = Number(quantities[item.id] ?? 0);
+      const delta = desiredContribution - harvestedContribution;
+      const nextStock = state.previous + delta;
+      if (nextStock < 0) {
+        throw new Error(`${item.productName}: aggregate stock would become negative. Current stock is ${state.previous.toLocaleString()}g, while this batch adjustment removes ${Math.abs(delta).toLocaleString()}g.`);
+      }
+      state.previous = nextStock;
+    }
+
+    // Apply each product's final aggregate stock once, even when a batch contains
+    // multiple items for the same production product.
+    for (const state of productStates.values()) {
+      const current = state.product;
+      const nextStock = state.previous;
+      transaction.update(state.ref, {
+        stockGrams: nextStock,
+        stock: nextStock,
+        status: nextStock === 0 && current.status === "active"
+          ? "out_of_stock"
+          : current.status === "out_of_stock" && nextStock > 0
+            ? "active"
+            : current.status,
+        updatedAt: serverTimestamp(),
+      });
+      const adjustmentRef = doc(collection(db, "inventoryAdjustments"));
+      const productItems = selectedItems.filter(item => item.productId === current.id);
+      const detail = productItems.map(item => `${item.productName}: ${Number(quantities[item.id] ?? 0)}g`).join(", ");
+      transaction.set(adjustmentRef, {
+        productId: current.id,
+        productName: current.name,
+        type: "batch_stock",
+        quantity: productItems.reduce((sum, item) => sum + Number(quantities[item.id] ?? 0), 0),
+        unit: "g",
+        previousStock: nextStock - productItems.reduce((sum, item) => sum + (Number(quantities[item.id] ?? 0) - Number(item.actualYieldGrams ?? 0)), 0),
+        newStock: nextStock,
+        reason: `Batch-wise stock reconciliation: ${latest.batchNumber} (${detail})`,
+        growingBatchId: batch.id,
+        createdByUid: uid,
+        createdByEmail: email ?? "",
+        createdAt: serverTimestamp(),
+      });
+    }
+
+    transaction.update(batchRef, {
+      items: updatedItems,
+      stockAdjusted: true,
+      stockAdjustedAt: serverTimestamp(),
+      stockAdjustedByUid: uid,
+      stockAdjustedByEmail: email ?? "",
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  await auditEvent("batch_stock_adjustment", "growingBatches", batch.id, `Batch-wise stock reconciled for ${batch.batchNumber}`);
+}
+
+export async function markGrowingBatchDelivered(
+  batch: GrowingBatch,
+  uid: string,
+  email?: string,
+) {
+  if (batch.delivered) throw new Error("This batch is already marked as delivered.");
+  const batchRef = doc(db, "growingBatches", batch.id);
+  await runTransaction(db, async transaction => {
+    const snapshot = await transaction.get(batchRef);
+    if (!snapshot.exists()) throw new Error("Growing batch no longer exists.");
+    const latest = snapshot.data() as GrowingBatch;
+    if (latest.delivered) throw new Error("This batch is already marked as delivered.");
+    transaction.update(batchRef, {
+      delivered: true,
+      deliveredAt: serverTimestamp(),
+      deliveredByUid: uid,
+      deliveredByEmail: email ?? "",
+      updatedAt: serverTimestamp(),
+    });
+  });
+  await auditEvent("batch_delivered", "growingBatches", batch.id, `Marked batch ${batch.batchNumber} as delivered`);
+}

@@ -1,20 +1,18 @@
+/**
+ * Simple production-planning row.
+ *
+ * The forecast screen intentionally focuses on four numbers an admin needs:
+ * current stock, stock expected from ongoing batches, current requirement,
+ * and the remaining quantity that still needs to be grown.
+ */
 export type ForecastRow = {
   productId: string;
   productName: string;
   cycleDays: number;
-  expectedYieldPerTrayGrams: number;
-  minimumYieldPerTrayGrams: number;
-  safetyStockGrams: number;
   currentStockGrams: number;
   inProductionGrams: number;
-  historicalDemandGrams: number;
-  averageDailyDemandGrams: number;
-  cycleDemandForecastGrams: number;
-  committedOrderGrams: number;
-  projectedNeedGrams: number;
-  projectedAvailableGrams: number;
-  additionalGramsNeeded: number;
-  recommendedTrays: number;
-  coverageDays: number | null;
-  confidence: "Low" | "Medium" | "Good";
+  currentRequirementGrams: number;
+  needToGrowGrams: number;
+  expectedYieldGramsPerTray: number;
+  traysToGrow: number;
 };

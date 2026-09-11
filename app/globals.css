@@ -95,4 +95,8 @@ body { margin: 0; }
 .seedlings-kpi-value { font-size: 2rem; line-height: 1.15; font-weight: 700; margin-top: .35rem; color: var(--bs-body-color); }
 .seedlings-kpi-icon { width: 44px; height: 44px; border-radius: 10px; display:flex; align-items:center; justify-content:center; background: rgba(25,135,84,.12); color: var(--seedlings-green, #198754); font-size: 1.25rem; flex: 0 0 auto; }
 .seedlings-kpi-link { font-size: .85rem; color: var(--seedlings-green, #198754); font-weight: 600; }
+/* Order details uses a single modal layer so the backdrop cannot sit above the dialog. */
 .modal.d-block { background: rgba(0,0,0,.55); }
+.seedlings-order-modal { z-index: 1060; pointer-events: auto; }
+.seedlings-order-modal .modal-dialog,
+.seedlings-order-modal .modal-content { pointer-events: auto; }

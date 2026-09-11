@@ -1,0 +1,30 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function profile() {
+      return firestore.get(/databases/(default)/documents/userProfiles/$(request.auth.uid)).data;
+    }
+
+    function admin() {
+      return signedIn()
+        && firestore.exists(/databases/(default)/documents/userProfiles/$(request.auth.uid))
+        && profile().status == "active"
+        && profile().role in ["ADMIN", "SUPER_ADMIN", "OPERATIONS"];
+    }
+
+    match /orders/{orderId}/payment-receipt-{fileName} {
+      allow read: if admin();
+      allow write: if admin() && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

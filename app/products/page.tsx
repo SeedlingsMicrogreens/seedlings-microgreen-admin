@@ -6,6 +6,7 @@ import { ImageGalleryUploader } from "@/components/ui/ImageGalleryUploader";
 import { RichTextEditor } from "@/components/ui/RichTextEditor";
 import { createRecord, deleteRecord, listCollection, updateRecord } from "@/lib/firestore";
 import type { Product, ProductStatus } from "@/types/catalog";
+import {confirmAction} from "@/lib/alerts";
 
 const emptyProduct: Omit<Product, "id"> = {
   name: "",
@@ -204,7 +205,7 @@ export default function ProductsPage() {
   }
 
   async function remove(id: string) {
-    if (!confirm("Delete this production product? This should only be used when the product has no dependent production/sales records.")) return;
+    if (!(await confirmAction({title:"Delete this production product?",text:"Only delete a product when it has no dependent production or sales records.",confirmText:"Yes, delete"}))) return;
     try {
       await deleteRecord("products", id);
       await load();
@@ -309,9 +310,9 @@ export default function ProductsPage() {
                         </td>
                         <td>{product.sku || "—"}</td>
                         <td>{Number(product.growingCycleDays ?? 0)} days</td>
-                        <td>{Number(product.expectedYieldGramsPerTray ?? 0).toLocaleString()} g</td>
-                        <td>{Number(product.expectedLossGramsPerTray ?? 0).toLocaleString()} g</td>
-                        <td className={stock <= threshold ? "text-danger fw-bold" : "fw-semibold"}>{stock.toLocaleString()} g</td>
+                        <td>{Number(product.expectedYieldGramsPerTray ?? 0).toLocaleString()} gms</td>
+                        <td>{Number(product.expectedLossGramsPerTray ?? 0).toLocaleString()} gms</td>
+                        <td className={stock <= threshold ? "text-danger fw-bold" : "fw-semibold"}>{stock.toLocaleString()} gms</td>
                         <td><span className={`badge text-bg-${statusClass(product.status)}`}>{statusLabel(product.status)}</span></td>
                         <td className="text-end">
                           <div className="btn-group btn-group-sm">
@@ -382,16 +383,16 @@ export default function ProductsPage() {
                         <label className="form-label">Growing cycle (days) *</label>
                         <input className="form-control mb-3" type="number" min="1" step="1" value={form.growingCycleDays} onChange={(e) => setForm({ ...form, growingCycleDays: Number(e.target.value) })} />
 
-                        <label className="form-label">Expected usable yield / tray (g) *</label>
+                        <label className="form-label">Expected usable yield / tray (gms) *</label>
                         <input className="form-control mb-3" type="number" min="1" step="1" value={form.expectedYieldGramsPerTray} onChange={(e) => setForm({ ...form, expectedYieldGramsPerTray: Number(e.target.value) })} />
 
-                        <label className="form-label">Minimum yield / tray (g) *</label>
+                        <label className="form-label">Minimum yield / tray (gms) *</label>
                         <input className="form-control mb-3" type="number" min="0" step="1" value={form.minimumYieldGramsPerTray} onChange={(e) => setForm({ ...form, minimumYieldGramsPerTray: Number(e.target.value) })} />
 
-                        <label className="form-label">Expected loss / tray (g) *</label>
+                        <label className="form-label">Expected loss / tray (gms) *</label>
                         <input className="form-control mb-3" type="number" min="0" step="1" value={form.expectedLossGramsPerTray} onChange={(e) => setForm({ ...form, expectedLossGramsPerTray: Number(e.target.value) })} />
 
-                        <label className="form-label">Safety stock (g) *</label>
+                        <label className="form-label">Safety stock (gms) *</label>
                         <input className="form-control mb-3" type="number" min="0" step="1" value={form.safetyStockGrams} onChange={(e) => setForm({ ...form, safetyStockGrams: Number(e.target.value) })} />
 
                         <div className="form-check">
@@ -406,10 +407,10 @@ export default function ProductsPage() {
                       <div className="card-body">
                         <div className="alert alert-light border mb-3">
                           <div className="small text-muted">Actual usable stock</div>
-                          <div className="h4 mb-1">{stockValue(form as Product).toLocaleString()} g</div>
+                          <div className="h4 mb-1">{stockValue(form as Product).toLocaleString()} gms</div>
                           <div className="small">This value is updated by actual harvest. It cannot be edited from Product Master.</div>
                         </div>
-                        <label className="form-label">Low-stock threshold (g) *</label>
+                        <label className="form-label">Low-stock threshold (gms) *</label>
                         <input className="form-control" type="number" min="0" step="1" value={form.lowStockThresholdGrams} onChange={(e) => setForm({ ...form, lowStockThresholdGrams: Number(e.target.value) })} />
                       </div>
                     </div>

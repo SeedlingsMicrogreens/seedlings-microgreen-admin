@@ -17,6 +17,9 @@ export type SalesProduct = {
   imageUrl?: string;
   type: SalesProductType;
   components: SalesProductComponent[];
+  /** Original/reference retail price shown to customers before any discount. */
+  mrp: number;
+  /** Actual customer-facing sale price. */
   sellingPrice: number;
   /** Current packed saleable units available for fulfilment/orders. */
   packedStockQuantity?: number;

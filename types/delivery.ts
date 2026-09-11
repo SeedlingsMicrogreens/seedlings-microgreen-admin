@@ -22,6 +22,7 @@ export type DeliveryAssignment = {
   deliveryUserId: string;
   deliveryUserAuthUid: string;
   deliveryUserName: string;
+  deliveryUserMobile?: string;
   status: DeliveryAssignmentStatus;
   assignedByUid: string;
   assignedByEmail?: string;

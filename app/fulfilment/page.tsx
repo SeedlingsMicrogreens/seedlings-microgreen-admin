@@ -8,6 +8,7 @@ import { listManualFulfilments, packSalableProducts } from "@/lib/fulfilmentServ
 import type { Product } from "@/types/catalog";
 import type { SalesProduct } from "@/types/salesProduct";
 import type { Fulfilment, PackingLine } from "@/types/fulfilment";
+import type { Order } from "@/types/order";
 import type { GrowingBatch } from "@/types/growingBatch";
 
 type DraftLine = PackingLine & { key: string };
@@ -37,6 +38,7 @@ export default function FulfilmentPage() {
   const [salableProducts, setSalableProducts] = useState<SalesProduct[]>([]);
   const [batches, setBatches] = useState<GrowingBatch[]>([]);
   const [history, setHistory] = useState<Fulfilment[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [lines, setLines] = useState<DraftLine[]>([newLine()]);
   const [showHistory, setShowHistory] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -47,16 +49,18 @@ export default function FulfilmentPage() {
   async function load() {
     setLoading(true);
     try {
-      const [productionProducts, salesProducts, growingBatches, fulfilments] = await Promise.all([
+      const [productionProducts, salesProducts, growingBatches, fulfilments, ordersList] = await Promise.all([
         listCollection<Product>("products"),
         listCollection<SalesProduct>("salesProducts"),
         listCollection<GrowingBatch>("growingBatches"),
         listManualFulfilments(),
+        listCollection<Order>("orders", "createdAt"),
       ]);
       setProducts(productionProducts);
       setSalableProducts(salesProducts);
       setBatches(growingBatches);
       setHistory(fulfilments);
+      setOrders(ordersList);
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load packaging data.");
@@ -97,7 +101,7 @@ export default function FulfilmentPage() {
       if (!Number.isInteger(boxGrams) || boxGrams <= 0) {
         invalid.push(`${salable.name}: enter valid Box Gms.`);
       } else if (recipeGrams !== boxGrams) {
-        invalid.push(`${salable.name}: Box Gms should be ${recipeGrams}g for its recipe.`);
+        invalid.push(`${salable.name}: Box Gms should be ${recipeGrams} gms for its recipe.`);
       }
 
       if (!Number.isInteger(quantityPacked) || quantityPacked <= 0) {
@@ -180,6 +184,57 @@ export default function FulfilmentPage() {
     }
   }
 
+  const boxRequirements = useMemo(() => {
+    type Requirement = {
+      salableProductId: string;
+      productName: string;
+      weightGrams: number;
+      boxes: number;
+      type: SalesProduct["type"];
+    };
+
+    const requirements = new Map<string, Requirement>();
+
+    for (const order of orders) {
+      // Demand remains required until the order is delivered or cancelled.
+      if (order.status === "delivered" || order.status === "cancelled") continue;
+
+      for (const item of order.items ?? []) {
+        const salableId = item.salableProductId || item.productId;
+        const salable = salableById.get(salableId);
+        if (!salable) continue;
+
+        const boxes = Math.max(0, Math.round(numberValue(item.quantity)));
+        if (!boxes) continue;
+
+        // The order item's weight is the actual customer-selected pack size.
+        // Fall back to the salable product recipe total for legacy orders.
+        const weightGrams = Math.max(
+          0,
+          Math.round(
+            numberValue(item.weightGrams) ||
+              salable.components.reduce((sum, component) => sum + numberValue(component.quantityGrams), 0)
+          )
+        );
+        if (!weightGrams) continue;
+
+        const key = `${salableId}::${weightGrams}`;
+        const existing = requirements.get(key);
+        requirements.set(key, {
+          salableProductId: salableId,
+          productName: item.productName || salable.name,
+          weightGrams,
+          boxes: (existing?.boxes ?? 0) + boxes,
+          type: salable.type,
+        });
+      }
+    }
+
+    return [...requirements.values()].sort(
+      (a, b) => a.productName.localeCompare(b.productName) || a.weightGrams - b.weightGrams
+    );
+  }, [orders, salableById]);
+
   // This is the persistent loose-stock view. It does not depend on the current worksheet.
   // Actual Produced = cumulative net usable grams recorded by harvested Growing Batch items.
   // Packaging is split between Single Salable Products and Combo Salable Products.
@@ -237,6 +292,42 @@ export default function FulfilmentPage() {
         {message && <div className="alert alert-success">{message}</div>}
         {error && <div className="alert alert-danger">{error}</div>}
 
+        <div className="card border-0 shadow-sm mb-4">
+          <div className="card-header d-flex justify-content-between align-items-center">
+            <div>
+              <strong>Box Requirement</strong>
+              <div className="small text-muted">Direct packing requirement from all open orders. Delivered and cancelled orders are excluded.</div>
+            </div>
+            <span className="badge text-bg-primary">
+              {boxRequirements.reduce((sum, row) => sum + row.boxes, 0).toLocaleString()} boxes
+            </span>
+          </div>
+          <div className="card-body">
+            {!loading && !boxRequirements.length && (
+              <div className="text-center text-muted py-3">No open order boxes to prepare.</div>
+            )}
+            {loading && (
+              <div className="text-center py-3"><span className="spinner-border spinner-border-sm me-2" />Loading...</div>
+            )}
+            <div className="row g-3">
+              {boxRequirements.map((row) => (
+                <div className="col-12 col-md-6 col-xl-4" key={`${row.salableProductId}-${row.weightGrams}`}>
+                  <div className="border rounded-3 p-3 h-100 bg-light-subtle">
+                    <div className="fw-bold fs-5 mb-2">{row.productName}</div>
+                    <div className="d-flex align-items-center justify-content-between gap-3">
+                      <span className="badge text-bg-light border fs-6 fw-normal">{row.weightGrams.toLocaleString()} gms</span>
+                      <span className="fw-bold fs-5">{row.boxes.toLocaleString()} boxes</span>
+                    </div>
+                    {row.type === "multiple" && (
+                      <div className="small text-muted mt-2">Combo box</div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
         <div className="card border-0 shadow-sm">
           <div className="card-header d-flex justify-content-between align-items-center">
             <strong>Manual Packing Worksheet</strong>
@@ -293,7 +384,7 @@ export default function FulfilmentPage() {
                             </select>
                             {selected && (
                               <div className="small text-muted mt-1">
-                                {selected.type === "single" ? "Single" : "Combo"} · Recipe: {recipeGrams.toLocaleString()}g · Packed stock: {numberValue(selected.packedStockQuantity).toLocaleString()}
+                                {selected.type === "single" ? "Single" : "Combo"} · Recipe: {recipeGrams.toLocaleString()}gms · Packed stock: {numberValue(selected.packedStockQuantity).toLocaleString()}
                               </div>
                             )}
                           </td>
@@ -308,7 +399,7 @@ export default function FulfilmentPage() {
                               required
                             />
                             {selected && line.boxGrams !== recipeGrams && (
-                              <div className="small text-danger mt-1">Expected {recipeGrams}g</div>
+                              <div className="small text-danger mt-1">Expected {recipeGrams}gms</div>
                             )}
                           </td>
                           <td>
@@ -357,10 +448,10 @@ export default function FulfilmentPage() {
                       {preview.rows.map((row) => (
                         <tr key={row.productId}>
                           <td>{row.productName}</td>
-                          <td className="text-end">{row.required.toLocaleString()} g</td>
-                          <td className="text-end">{row.available.toLocaleString()} g</td>
+                          <td className="text-end">{row.required.toLocaleString()} gms</td>
+                          <td className="text-end">{row.available.toLocaleString()} gms</td>
                           <td className={`text-end fw-semibold ${row.remaining < 0 ? "text-danger" : "text-success"}`}>
-                            {row.remaining.toLocaleString()} g
+                            {row.remaining.toLocaleString()} gms
                           </td>
                         </tr>
                       ))}
@@ -456,10 +547,10 @@ export default function FulfilmentPage() {
                         <strong>{record.salableProductName}</strong>
                         <div className="small text-muted">{record.salableProductSku || ""}</div>
                       </td>
-                      <td>{record.boxGrams ? `${record.boxGrams.toLocaleString()} g` : "—"}</td>
+                      <td>{record.boxGrams ? `${record.boxGrams.toLocaleString()} gms` : "—"}</td>
                       <td>{record.quantityPacked}</td>
-                      <td>{numberValue(record.totalGramsConsumed).toLocaleString()} g</td>
-                      <td>{(record.items ?? []).map((item) => `${item.productName} ${numberValue(item.totalGrams)}g`).join(" + ")}</td>
+                      <td>{numberValue(record.totalGramsConsumed).toLocaleString()} gms</td>
+                      <td>{(record.items ?? []).map((item) => `${item.productName} ${numberValue(item.totalGrams)} gms`).join(" + ")}</td>
                     </tr>
                   ))}
                   {!loading && !history.length && (
@@ -500,11 +591,11 @@ export default function FulfilmentPage() {
                   {productAvailableRows.map((row) => (
                     <tr key={row.productId}>
                       <td><strong>{row.productName}</strong></td>
-                      <td className="text-end">{row.actualProduced.toLocaleString()} g</td>
-                      <td className="text-end">{row.individualPackaging.toLocaleString()} g</td>
-                      <td className="text-end">{row.comboPackaging.toLocaleString()} g</td>
+                      <td className="text-end">{row.actualProduced.toLocaleString()} gms</td>
+                      <td className="text-end">{row.individualPackaging.toLocaleString()} gms</td>
+                      <td className="text-end">{row.comboPackaging.toLocaleString()} gms</td>
                       <td className={`text-end fw-semibold ${row.available < 0 ? "text-danger" : ""}`}>
-                        {row.available.toLocaleString()} g
+                        {row.available.toLocaleString()} gms
                       </td>
                     </tr>
                   ))}

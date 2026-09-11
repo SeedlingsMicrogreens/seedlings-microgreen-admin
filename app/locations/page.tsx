@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { createRecord, deleteRecord, listCollection, updateRecord } from "@/lib/firestore";
 import type { Location, LocationType } from "@/types/location";
+import {confirmAction,showSuccess} from "@/lib/alerts";
 
 const empty={name:"",type:"rack" as LocationType,active:true,notes:""};
 
@@ -14,7 +15,7 @@ export default function LocationsPage(){
   function openCreate(){setEditing(null);setForm(empty);setShowForm(true);setError("");}
   function openEdit(l:Location){setEditing(l.id);setForm({name:l.name,type:l.type,active:l.active,notes:l.notes??""});setShowForm(true);setError("");}
   async function save(e:React.FormEvent){e.preventDefault();if(!form.name.trim())return setError("Location name is required.");try{if(editing)await updateRecord("locations",editing,form);else await createRecord("locations",form);setShowForm(false);setEditing(null);await load();}catch{setError("Unable to save location.");}}
-  async function remove(id:string){if(!confirm("Delete this location?"))return;try{await deleteRecord("locations",id);await load();}catch{setError("Unable to delete location.");}}
+  async function remove(id:string){if(!(await confirmAction({title:"Delete this location?",text:"This action cannot be undone.",confirmText:"Yes, delete"})))return;try{await deleteRecord("locations",id);await load();await showSuccess("Location deleted")}catch{setError("Unable to delete location.");}}
   return <AdminPage><div className="container-fluid py-3">
     <div className="d-flex justify-content-between align-items-start mb-3"><div><h1 className="h3 seedlings-brand mb-1">Locations</h1><p className="text-muted mb-0">Master list used when assigning growing batches to a rack, room or growing area.</p></div><button className="btn btn-success" onClick={openCreate}><i className="bi bi-plus-lg me-1"/>Add Location</button></div>
     {error&&<div className="alert alert-danger">{error}</div>}

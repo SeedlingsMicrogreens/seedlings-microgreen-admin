@@ -37,6 +37,8 @@ export type GrowingBatchItem = {
 
   status: GrowingBatchItemStatus;
   notes?: string;
+  /** Batch-wise inventory quantity recorded after harvest reconciliation. */
+  batchStockGrams?: number;
 };
 
 export type GrowingBatch = {
@@ -52,4 +54,14 @@ export type GrowingBatch = {
   createdByEmail?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
+  /** True after the batch has been reconciled on Inventory → Batch-wise Stock. */
+  stockAdjusted?: boolean;
+  stockAdjustedAt?: unknown;
+  stockAdjustedByUid?: string;
+  stockAdjustedByEmail?: string;
+  /** True when this batch has been fully delivered/closed operationally. */
+  delivered?: boolean;
+  deliveredAt?: unknown;
+  deliveredByUid?: string;
+  deliveredByEmail?: string;
 };

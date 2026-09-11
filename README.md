@@ -277,3 +277,6 @@ This phase records the refund in the Admin order record. There is currently no p
 
 ## Current implementation phase
 Phase D — Orders. See `docs/phase-D.md` and `DEVELOPMENT-ROADMAP.md` for the authoritative scope.
+
+## Phase 32 — Packing Box Requirement Analytics
+See `README_PHASE32_BOX_REQUIREMENT_ANALYTICS.md` for the direct box requirement analytics view added to Packing & Fulfilment.
