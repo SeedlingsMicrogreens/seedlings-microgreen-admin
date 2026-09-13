@@ -16,10 +16,7 @@ export type Product = {
   name: string;
   sku?: string;
   slug?: string;
-  description: string;
-  shortDescription: string;
   category: string;
-  imageUrls: string[];
 
   status: ProductStatus;
   featured?: boolean;

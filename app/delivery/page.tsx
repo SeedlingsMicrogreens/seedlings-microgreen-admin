@@ -9,8 +9,9 @@ import { confirmAction } from "@/lib/alerts";
 import type { DeliveryAssignment, DeliveryUser, DeliveryUserStatus } from "@/types/delivery";
 import type { Order } from "@/types/order";
 import type { SalesProduct } from "@/types/salesProduct";
+import type { SubscriptionDelivery } from "@/types/subscriptionDelivery";
 
-type Tab = "handover" | "status" | "users";
+type Tab = "handover" | "status" | "subscriptionDeliveries" | "users";
 
 function userName(u: DeliveryUser) { return u.name?.trim() || "Unnamed delivery user"; }
 function customerName(order: Order) { return order.customerName?.trim() || order.customerMobile || order.customerId; }
@@ -36,6 +37,7 @@ export default function DeliveryPage() {
   const [users, setUsers] = useState<DeliveryUser[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [assignments, setAssignments] = useState<DeliveryAssignment[]>([]);
+  const [subscriptionDeliveries, setSubscriptionDeliveries] = useState<SubscriptionDelivery[]>([]);
   const [salableProducts, setSalableProducts] = useState<SalesProduct[]>([]);
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
   const [selectedUserId, setSelectedUserId] = useState("");
@@ -50,15 +52,17 @@ export default function DeliveryPage() {
   async function load() {
     setLoading(true);
     try {
-      const [deliveryUsers, orderData, assignmentData, salesProducts] = await Promise.all([
+      const [deliveryUsers, orderData, assignmentData, subscriptionDeliveryData, salesProducts] = await Promise.all([
         listCollection<DeliveryUser>("deliveryUsers"),
         listCollection<Order>("orders"),
         listCollection<DeliveryAssignment>("deliveryAssignments", "assignedAt"),
+        listCollection<SubscriptionDelivery>("subscriptionDeliveries", "createdAt"),
         listCollection<SalesProduct>("salesProducts"),
       ]);
       setUsers(deliveryUsers);
       setOrders(orderData);
       setAssignments(assignmentData);
+      setSubscriptionDeliveries(subscriptionDeliveryData);
       setSalableProducts(salesProducts);
       setError("");
     } catch {
@@ -172,6 +176,7 @@ export default function DeliveryPage() {
       <ul className="nav nav-tabs mb-3">
         <li className="nav-item"><button className={`nav-link ${tab === "handover" ? "active" : ""}`} onClick={() => { setTab("handover"); setSelectedUser(null); setCreatingUser(false); }}><i className="bi bi-box-arrow-right me-1" /> Handover</button></li>
         <li className="nav-item"><button className={`nav-link ${tab === "status" ? "active" : ""}`} onClick={() => setTab("status")}><i className="bi bi-truck me-1" /> Delivery Status <span className="badge text-bg-secondary ms-1">{deliveryStatusAssignments.length}</span></button></li>
+        <li className="nav-item"><button className={`nav-link ${tab === "subscriptionDeliveries" ? "active" : ""}`} onClick={() => setTab("subscriptionDeliveries")}><i className="bi bi-arrow-repeat me-1" /> Subscription Deliveries <span className="badge text-bg-secondary ms-1">{subscriptionDeliveries.length}</span></button></li>
         <li className="nav-item"><button className={`nav-link ${tab === "users" ? "active" : ""}`} onClick={() => setTab("users")}><i className="bi bi-people me-1" /> Delivery Users <span className="badge text-bg-secondary ms-1">{users.length}</span></button></li>
       </ul>
 
@@ -237,6 +242,18 @@ export default function DeliveryPage() {
           })}
           {!deliveryStatusAssignments.length && !loading && <div className="text-center text-muted py-5"><i className="bi bi-truck fs-2 d-block mb-2" />No handovers for today yet.</div>}
         </div>
+      </div>}
+
+      {tab === "subscriptionDeliveries" && <div className="card">
+        <div className="card-header"><h3 className="card-title mb-0">Actual Subscription Deliveries</h3><div className="small text-muted mt-1">One record is created only when a subscription order is actually handed over. Future deliveries are not stored here.</div></div>
+        <div className="table-responsive"><table className="table table-hover align-middle mb-0"><thead><tr><th>Delivery</th><th>Customer</th><th>Product</th><th>Delivery Date</th><th>Status</th><th>Order</th></tr></thead><tbody>
+          {subscriptionDeliveries.map(d => {
+            const order = orders.find(o => o.id === d.orderId);
+            return <tr key={d.id}><td><strong>#{d.deliveryNumber}</strong><div className="small text-muted">{d.subscriptionId.slice(0, 8)}</div></td><td><strong>{d.customerName || d.customerMobile || d.customerId}</strong><div className="small text-muted">{d.customerMobile || "—"}</div></td><td>{d.productName}</td><td>{d.deliveryDate || "—"}</td><td><span className={`badge text-bg-${d.status === "delivered" ? "success" : d.status === "failed" ? "danger" : d.status === "cancelled" ? "secondary" : "info"}`}>{d.status.replaceAll("_", " ")}</span></td><td>{order?.orderNumber || d.orderNumber || d.orderId}</td></tr>;
+          })}
+          {!subscriptionDeliveries.length && !loading && <tr><td colSpan={6} className="text-center text-muted py-5"><i className="bi bi-arrow-repeat fs-2 d-block mb-2" />No actual subscription deliveries have been handed over yet.</td></tr>}
+          {loading && <tr><td colSpan={6} className="text-center py-5"><span className="spinner-border spinner-border-sm me-2" />Loading subscription deliveries...</td></tr>}
+        </tbody></table></div>
       </div>}
 
       {tab === "users" && (selectedUser || creatingUser ? <div className="card"><div className="card-header"><h3 className="card-title mb-0">{selectedUser ? "Edit Delivery User" : "Add Delivery User"}</h3></div><DeliveryUserForm user={selectedUser} onSubmit={saveDeliveryUser} onCancel={() => { setSelectedUser(null); setCreatingUser(false); }} /></div> : <div className="card">

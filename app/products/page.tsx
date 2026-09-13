@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { deleteField } from "firebase/firestore";
 import { AdminPage } from "@/components/admin/AdminPage";
-import { ImageGalleryUploader } from "@/components/ui/ImageGalleryUploader";
-import { RichTextEditor } from "@/components/ui/RichTextEditor";
 import { createRecord, deleteRecord, listCollection, updateRecord } from "@/lib/firestore";
 import type { Product, ProductStatus } from "@/types/catalog";
 import {confirmAction} from "@/lib/alerts";
@@ -12,10 +11,7 @@ const emptyProduct: Omit<Product, "id"> = {
   name: "",
   sku: "",
   slug: "",
-  description: "",
-  shortDescription: "",
   category: "Microgreens",
-  imageUrls: [],
   status: "active",
   featured: false,
   sortOrder: 0,
@@ -30,12 +26,12 @@ const emptyProduct: Omit<Product, "id"> = {
   safetyStockGrams: 1000,
 };
 
-function stripHtml(value: string) {
-  return value.replace(/<[^>]*>/g, "").trim();
+function slugify(value: string) {
+  return value.toLowerCase().trim().replace(/[^a-z_-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
 }
 
-function slugify(value: string) {
-  return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+function sanitizeSlug(value: string) {
+  return value.toLowerCase().replace(/[^a-z_-]/g, "");
 }
 
 function stockValue(product: Product) {
@@ -98,7 +94,7 @@ export default function ProductsPage() {
 
   function openCreate() {
     setEditing(null);
-    setForm({ ...emptyProduct, imageUrls: [] });
+    setForm({ ...emptyProduct });
     setError("");
     setTab("form");
   }
@@ -111,10 +107,7 @@ export default function ProductsPage() {
       name: product.name ?? "",
       sku: product.sku ?? "",
       slug: product.slug ?? "",
-      description: product.description ?? "",
-      shortDescription: product.shortDescription ?? "",
       category: product.category ?? "Microgreens",
-      imageUrls: Array.isArray(product.imageUrls) ? product.imageUrls : [],
       stockGrams: stockValue(product),
       lowStockThresholdGrams: thresholdValue(product),
       growingActive: product.growingActive !== false,
@@ -130,7 +123,7 @@ export default function ProductsPage() {
 
   function cancel() {
     setEditing(null);
-    setForm({ ...emptyProduct, imageUrls: [] });
+    setForm({ ...emptyProduct });
     setError("");
     setTab("list");
   }
@@ -148,8 +141,6 @@ export default function ProductsPage() {
 
     if (!form.name.trim()) return setError("Product name is required.");
     if (!form.sku?.trim()) return setError("SKU / product code is required.");
-    if (!stripHtml(form.shortDescription)) return setError("Short description is required.");
-    if (!stripHtml(form.description)) return setError("Description is required.");
     if (!Number.isInteger(cycle) || cycle <= 0) return setError("Growing cycle must be at least 1 whole day.");
     if (!Number.isInteger(expected) || expected <= 0) return setError("Expected yield per tray must be greater than 0.");
     if (!Number.isInteger(minimum) || minimum < 0) return setError("Minimum yield per tray cannot be negative.");
@@ -166,11 +157,8 @@ export default function ProductsPage() {
     const normalized = {
       name: form.name.trim(),
       sku: form.sku!.trim(),
-      slug: form.slug?.trim() || slugify(form.name),
-      description: form.description,
-      shortDescription: form.shortDescription,
+      slug: sanitizeSlug(form.slug?.trim() ?? "") || slugify(form.name),
       category: form.category.trim() || "Microgreens",
-      imageUrls: form.imageUrls.filter(Boolean),
       status: form.status,
       featured: Boolean(form.featured),
       sortOrder: Number(form.sortOrder ?? 0),
@@ -191,7 +179,7 @@ export default function ProductsPage() {
     setSaving(true);
     try {
       if (editing) {
-        await updateRecord("products", editing, normalized);
+        await updateRecord("products", editing, { ...normalized, description: deleteField(), shortDescription: deleteField(), imageUrls: deleteField() });
       } else {
         await createRecord("products", normalized);
       }
@@ -300,11 +288,9 @@ export default function ProductsPage() {
                       <tr key={product.id}>
                         <td>
                           <div className="d-flex align-items-center gap-2">
-                            {product.imageUrls?.[0] ? (
-                              <img src={product.imageUrls[0]} alt="" style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6 }} />
-                            ) : (
-                              <div className="border rounded d-flex align-items-center justify-content-center text-muted" style={{ width: 48, height: 48 }}><i className="bi bi-seedling" /></div>
-                            )}
+                            <div className="border rounded d-flex align-items-center justify-content-center text-muted" style={{ width: 48, height: 48 }}>
+                              <i className="bi bi-seedling" />
+                            </div>
                             <div><strong>{product.name}</strong><div className="small text-muted">{product.category}</div></div>
                           </div>
                         </td>
@@ -352,24 +338,9 @@ export default function ProductsPage() {
                           </div>
                           <div className="col-md-4">
                             <label className="form-label">Slug</label>
-                            <input className="form-control" value={form.slug ?? ""} onChange={(e) => setForm({ ...form, slug: e.target.value })} placeholder="Auto-generated if empty" />
+                            <input className="form-control" value={form.slug ?? ""} onChange={(e) => setForm({ ...form, slug: sanitizeSlug(e.target.value) })} placeholder="e.g. broccoli-microgreens" inputMode="text" autoCapitalize="none" spellCheck={false} /><div className="form-text">Lowercase letters, hyphen (-) and underscore (_) only. Spaces and other characters are not allowed.</div>
                           </div>
                         </div>
-                        <div className="mt-3">
-                          <label className="form-label">Short description *</label>
-                          <RichTextEditor value={form.shortDescription} onChange={(html) => setForm({ ...form, shortDescription: html })} placeholder="Short product description..." minHeight={100} />
-                        </div>
-                        <div className="mt-3">
-                          <label className="form-label">Description *</label>
-                          <RichTextEditor value={form.description} onChange={(html) => setForm({ ...form, description: html })} placeholder="Detailed product description..." minHeight={180} />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="card border mt-4">
-                      <div className="card-header"><strong>Product Images</strong></div>
-                      <div className="card-body">
-                        <ImageGalleryUploader value={form.imageUrls} onChange={(imageUrls) => setForm({ ...form, imageUrls })} />
                       </div>
                     </div>
                   </div>

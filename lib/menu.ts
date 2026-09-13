@@ -83,7 +83,8 @@ export const menuItems: MenuNode[] = [
     icon: "bi-shield-lock",
     children: [
       { type: "item", text: "Subscription & Delivery Masters", href: "/subscription-masters", icon: "bi-sliders" },
-      { type: "item", text: "Locations", href: "/locations", icon: "bi-geo-alt" },
+      { type: "item", text: "Geolocation Master", href: "/geolocations", icon: "bi-geo-alt" },
+      { type: "item", text: "Locations", href: "/locations", icon: "bi-pin-map" },
       { type: "item", text: "Admin Users", href: "/admin-users", icon: "bi-people" },
       { type: "item", text: "Audit Log", href: "/audit-log", icon: "bi-journal-text" },
       { type: "item", text: "System Settings", href: "/settings", icon: "bi-gear" },

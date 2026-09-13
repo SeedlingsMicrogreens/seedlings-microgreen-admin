@@ -1,6 +1,7 @@
 import { collection, doc, runTransaction, serverTimestamp } from "firebase/firestore";
 import { db } from "./firebase";
 import { auditEvent } from "./firestore";
+import { createSubscriptionDeliveryAtHandoverInTransaction, updateSubscriptionDeliveryStatusInTransaction } from "./subscriptionDeliveryService";
 import type { DeliveryUser, DeliveryAssignment } from "@/types/delivery";
 import type { Order, OrderStatus } from "@/types/order";
 
@@ -31,6 +32,9 @@ export async function assignOrderToDelivery(
 
     const history = Array.isArray(current.statusHistory) ? current.statusHistory : [];
     const nextStatus: OrderStatus = "out_for_delivery";
+
+    // Read/create the subscription delivery before any other transaction writes.
+    await createSubscriptionDeliveryAtHandoverInTransaction(transaction, order, adminUid, adminEmail);
 
     transaction.update(orderRef, {
       status: nextStatus,
@@ -63,7 +67,9 @@ export async function assignOrderToDelivery(
       assignedAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
+
   });
+
   await auditEvent("create", "deliveryAssignments", assignmentRef.id, `Assigned ${order.orderNumber || order.id} to ${deliveryUser.name}`);
 }
 
@@ -85,6 +91,19 @@ export async function updateDeliveryAssignmentStatus(
     cancelled: "cancelled"
   };
 
+  let subscriptionDeliveryStatus: import("@/types/subscriptionDelivery").SubscriptionDeliveryStatus = "out_for_delivery";
+
+  const subscriptionStatusByDeliveryStatus: Record<DeliveryAssignment["status"], import("@/types/subscriptionDelivery").SubscriptionDeliveryStatus> = {
+    assigned: "assigned",
+    accepted: "assigned",
+    picked_up: "out_for_delivery",
+    out_for_delivery: "out_for_delivery",
+    delivered: "delivered",
+    failed: "failed",
+    cancelled: "cancelled",
+  };
+  subscriptionDeliveryStatus = subscriptionStatusByDeliveryStatus[status];
+
   await runTransaction(db, async (transaction) => {
     const assignmentSnap = await transaction.get(assignmentRef);
     if (!assignmentSnap.exists()) throw new Error("Delivery assignment not found.");
@@ -97,6 +116,16 @@ export async function updateDeliveryAssignmentStatus(
     const order = orderSnap.data() as Order;
     const nextOrderStatus = orderStatusByDeliveryStatus[status];
     const history = Array.isArray(order.statusHistory) ? order.statusHistory : [];
+
+    // Update the subscription delivery before transaction writes, keeping all reads
+    // at the beginning of the Firestore transaction.
+    await updateSubscriptionDeliveryStatusInTransaction(
+      transaction,
+      { id: assignment.orderId, ...(orderSnap.data() as Omit<Order, "id">) } as Order,
+      subscriptionDeliveryStatus,
+      adminUid,
+      adminEmail,
+    );
 
     transaction.update(assignmentRef, {
       status,
@@ -121,6 +150,7 @@ export async function updateDeliveryAssignmentStatus(
         updatedAt: serverTimestamp()
       });
     }
+
   });
   await auditEvent("update", "deliveryAssignments", assignmentId, `Delivery assignment status changed to ${status}`);
 }

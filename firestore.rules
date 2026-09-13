@@ -45,6 +45,7 @@ service cloud.firestore {
     match /orders/{id} { allow read, write: if admin(); }
     match /deliveryUsers/{id} { allow read, write: if admin(); }
     match /deliveryAssignments/{id} { allow read, write: if admin(); }
+    match /subscriptionDeliveries/{id} { allow read, write: if admin(); }
     match /fulfilments/{id} { allow read, write: if admin(); }
 
     match /cmsPages/{id} { allow read, write: if admin(); }
