@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { deleteField } from "firebase/firestore";
 import { AdminPage } from "@/components/admin/AdminPage";
-import { createRecord, deleteRecord, listCollection, updateRecord } from "@/lib/firestore";
+import { createRecord, listCollection, updateRecord } from "@/lib/firestore";
+import { deleteOrDeactivateProduct } from "@/lib/productService";
 import type { Product, ProductStatus } from "@/types/catalog";
 import {confirmAction} from "@/lib/alerts";
 
@@ -193,12 +194,19 @@ export default function ProductsPage() {
   }
 
   async function remove(id: string) {
-    if (!(await confirmAction({title:"Delete this production product?",text:"Only delete a product when it has no dependent production or sales records.",confirmText:"Yes, delete"}))) return;
+    if (!(await confirmAction({
+      title:"Delete this production product?",
+      text:"This action cannot be undone. If this product is referenced by a growing batch, it will be retained and deactivated instead of being permanently deleted.",
+      confirmText:"Yes, delete",
+    }))) return;
     try {
-      await deleteRecord("products", id);
+      const result = await deleteOrDeactivateProduct(id);
       await load();
-    } catch {
-      setError("Unable to delete product.");
+      setError(result.action === "deactivated"
+        ? "Product is referenced by a growing batch, so it was deactivated instead of deleted."
+        : "");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to delete product.");
     }
   }
 

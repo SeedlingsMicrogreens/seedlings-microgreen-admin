@@ -5,7 +5,7 @@ import { AdminPage } from "@/components/admin/AdminPage";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { createRecord, listCollection, updateRecord } from "@/lib/firestore";
 import { assignOrderToDelivery, updateDeliveryAssignmentStatus } from "@/lib/deliveryService";
-import { confirmAction } from "@/lib/alerts";
+import { confirmAction, showSuccess } from "@/lib/alerts";
 import type { DeliveryAssignment, DeliveryUser, DeliveryUserStatus } from "@/types/delivery";
 import type { Order } from "@/types/order";
 import type { SalesProduct } from "@/types/salesProduct";
@@ -153,8 +153,8 @@ export default function DeliveryPage() {
   async function toggleUser(u: DeliveryUser) {
     const next = u.status === "active" ? "inactive" : "active";
     const action = next === "inactive" ? "deactivate" : "activate";
-    if (!(await confirmAction({ title: `${action === "deactivate" ? "Deactivate" : "Activate"} ${userName(u)}?`, text: `This will ${action} this delivery user.`, confirmText: action === "deactivate" ? "Yes, deactivate" : "Yes, activate" }))) return;
-    try { await updateRecord("deliveryUsers", u.id, { status: next }); await load(); } catch { setError("Unable to update delivery user."); }
+    if (!(await confirmAction({ title: `${action === "deactivate" ? "Deactivate" : "Activate"} ${userName(u)}?`, text: `This will ${action} this delivery user. This action changes the user's delivery access and cannot be undone by this confirmation.`, confirmText: action === "deactivate" ? "Yes, deactivate" : "Yes, activate" }))) return;
+    try { await updateRecord("deliveryUsers", u.id, { status: next }); await load(); await showSuccess(`Delivery user ${action}d`); } catch { setError("Unable to update delivery user."); }
   }
 
   function openCreate() { setSelectedUser(null); setCreatingUser(true); setError(""); setTab("users"); }

@@ -11,5 +11,7 @@ export async function updateSubscriptionPlan(id:string,input:Partial<Subscriptio
   return updateRecord("subscriptionPlans",id,input as Record<string,unknown>);
 }
 export async function deleteSubscriptionPlan(id:string) {
-  return deleteRecord("subscriptionPlans",id);
+  // Subscription plans are retained as inactive masters so existing subscriptions
+  // keep their historical pricing/schedule context.
+  return updateRecord("subscriptionPlans", id, { active: false });
 }

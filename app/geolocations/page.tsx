@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
-import { confirmAction, showSuccess } from "@/lib/alerts";
+import { confirmAction, showSuccess, showToast } from "@/lib/alerts";
 import { createRecord, deleteRecord, listCollection, updateRecord } from "@/lib/firestore";
 import type { Geolocation } from "@/types/geolocation";
 
@@ -54,15 +54,15 @@ export default function GeolocationsPage() {
     setSaving(true);
     try {
       const data = { locationName, pincode, oneTimeCharge, subscriptionCharge, active: form.active };
-      if (editing) { await updateRecord("geolocations", editing, data); await showSuccess("Geolocation updated"); }
-      else { await createRecord("geolocations", data); await showSuccess("Geolocation created"); }
+      if (editing) { await updateRecord("geolocations", editing, data); showToast("Geolocation updated successfully."); }
+      else { await createRecord("geolocations", data); showToast("Geolocation created successfully."); }
       setShowForm(false); setEditing(null); await load();
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to save geolocation."); }
     finally { setSaving(false); }
   }
 
   async function remove(location: Geolocation) {
-    if (!(await confirmAction({ title: `Delete ${location.locationName || location.pincode}?`, text: "This action cannot be undone.", confirmText: "Yes, delete" }))) return;
+    if (!(await confirmAction({ title: `Delete ${location.locationName || location.pincode}?`, text: "This action cannot be undone. The geolocation will be permanently deleted.", confirmText: "Yes, delete" }))) return;
     try { await deleteRecord("geolocations", location.id); await load(); await showSuccess("Geolocation deleted"); }
     catch (e) { setError(e instanceof Error ? e.message : "Unable to delete geolocation."); }
   }

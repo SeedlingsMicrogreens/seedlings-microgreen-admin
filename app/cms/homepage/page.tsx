@@ -2,6 +2,7 @@
 import {useEffect,useState} from "react";
 import {AdminPage} from "@/components/admin/AdminPage";
 import {createRecord,listCollectionByField,updateRecord} from "@/lib/firestore";
+import {showSuccess} from "@/lib/alerts";
 import {ImageUploader} from "@/components/ui/ImageUploader";
 
 const SECTIONS=[
@@ -34,7 +35,7 @@ export default function HomepageContent(){
  const section=SECTIONS.find(s=>s.key===selected)!;
  async function load(){try{const r=await listCollectionByField<RecordData>("websiteHomepageContent","key",selected);setForm(r[0]??{id:"",key:selected,status:"draft"});setError("")}catch{setError("Unable to load homepage content.")}}
  useEffect(()=>{void load()},[selected]);
- async function save(e:React.FormEvent){e.preventDefault();if(!form)return;setSaving(true);try{const {id:_id,...p0}=form;const p={...p0,key:selected,status:form.status};if(form.id)await updateRecord("websiteHomepageContent",form.id,p);else await createRecord("websiteHomepageContent",p);await load()}catch{setError("Unable to save homepage content.")}finally{setSaving(false)}}
+ async function save(e:React.FormEvent){e.preventDefault();if(!form)return;setSaving(true);try{const {id:_id,...p0}=form;const p={...p0,key:selected,status:form.status};if(form.id)await updateRecord("websiteHomepageContent",form.id,p);else await createRecord("websiteHomepageContent",p);await load();await showSuccess("Homepage content saved")}catch{setError("Unable to save homepage content.")}finally{setSaving(false)}}
  return <AdminPage><div className="container-fluid py-3"><h1 className="h3 seedlings-brand">Homepage Content</h1><p className="text-muted">Only the fixed sections from the approved V2 homepage are shown. Featured Microgreens is managed from Products → Featured.</p>{error&&<div className="alert alert-danger">{error}</div>}
  <div className="row"><div className="col-lg-3 mb-3"><div className="list-group">{SECTIONS.map(s=><button type="button" key={s.key} className={"list-group-item list-group-item-action "+(selected===s.key?"active":"")} onClick={()=>setSelected(s.key)}>{s.label}</button>)}</div></div>
  <div className="col-lg-9"><div className="card"><form onSubmit={save}><div className="card-body"><h5>{section.label}</h5>{section.fields.map(([key,label,type])=><div className="mb-3" key={key}>{key==="imageUrl"?<ImageUploader label={label} value={String(form?.[key]??"")} onChange={url=>setForm(f=>f&&({...f,[key]:url}))}/>:<><label className="form-label">{label}</label>{type==="textarea"?<textarea className="form-control" rows={3} value={String(form?.[key]??"")} onChange={e=>setForm(f=>f&&({...f,[key]:e.target.value}))}/>:<input className="form-control" value={String(form?.[key]??"")} onChange={e=>setForm(f=>f&&({...f,[key]:e.target.value}))}/>}</>}</div>)}<label className="form-label">Status</label><select className="form-select" value={String(form?.status??"draft")} onChange={e=>setForm(f=>f&&({...f,status:e.target.value as "draft"|"published"}))}><option value="draft">Draft</option><option value="published">Published</option></select></div><div className="card-footer"><button className="btn btn-success" disabled={saving}>{saving?"Saving…":"Save"}</button></div></form></div></div></div></div></AdminPage>

@@ -1,9 +1,12 @@
+import { collection, getDocs } from "firebase/firestore";
+import { db } from "./firebase";
 import { createRecord, deleteRecord, listCollection, updateRecord } from "./firestore";
 import type { Product } from "@/types/catalog";
 import type { SalesProduct, SalesProductComponent, SalesProductType } from "@/types/salesProduct";
 
 export function validateSalesProduct(input: {
   name: string;
+  imageUrl?: string;
   sku?: string;
   type: SalesProductType;
   components: SalesProductComponent[];
@@ -13,6 +16,7 @@ export function validateSalesProduct(input: {
   subscriptionPurchase: boolean;
 }) {
   if (!input.name.trim()) throw new Error("Sales product name is required.");
+  if (!input.imageUrl?.trim()) throw new Error("Product image is required for a Salable Product.");
   if (input.sku !== undefined && !input.sku.trim()) throw new Error("SKU cannot be blank.");
   if (!Number.isFinite(input.mrp) || input.mrp <= 0) {
     throw new Error("MRP must be greater than zero.");
@@ -58,8 +62,42 @@ export async function updateSalesProduct(id: string, data: Partial<Omit<SalesPro
   return updateRecord("salesProducts", id, data as Record<string, unknown>);
 }
 
+export async function deleteOrDeactivateSalesProduct(id: string) {
+  const [ordersSnapshot, subscriptionsSnapshot, deliveriesSnapshot] = await Promise.all([
+    getDocs(collection(db, "orders")),
+    getDocs(collection(db, "subscriptions")),
+    getDocs(collection(db, "subscriptionDeliveries")),
+  ]);
+
+  const referencedByOrder = ordersSnapshot.docs.some((item) => {
+    const data = item.data() as { items?: Array<{ salableProductId?: string; productId?: string }> };
+    return (data.items ?? []).some((orderItem) =>
+      orderItem.salableProductId === id || orderItem.productId === id
+    );
+  });
+
+  const referencedBySubscription = subscriptionsSnapshot.docs.some((item) => {
+    const data = item.data() as { salableProductId?: string; productId?: string };
+    return data.salableProductId === id || data.productId === id;
+  });
+
+  const referencedByDelivery = deliveriesSnapshot.docs.some((item) => {
+    const data = item.data() as { salableProductId?: string };
+    return data.salableProductId === id;
+  });
+
+  if (referencedByOrder || referencedBySubscription || referencedByDelivery) {
+    await updateRecord("salesProducts", id, { active: false });
+    return { action: "deactivated" as const };
+  }
+
+  await deleteRecord("salesProducts", id);
+  return { action: "deleted" as const };
+}
+
+/** @deprecated Use deleteOrDeactivateSalesProduct so references are preserved safely. */
 export async function deleteSalesProduct(id: string) {
-  return deleteRecord("salesProducts", id);
+  return deleteOrDeactivateSalesProduct(id);
 }
 
 export function buildComponent(product: Product, quantityGrams: number): SalesProductComponent {

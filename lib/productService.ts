@@ -1,11 +1,12 @@
 import {
   collection,
+  getDocs,
   doc,
   runTransaction,
   serverTimestamp
 } from "firebase/firestore";
 import { db } from "./firebase";
-import { auditEvent } from "./firestore";
+import { auditEvent, deleteRecord, updateRecord } from "./firestore";
 import type { InventoryAdjustmentType, Product } from "@/types/catalog";
 
 export async function adjustProductStock(
@@ -70,4 +71,25 @@ export async function adjustProductStock(
     });
   });
   await auditEvent("stock_adjustment", "products", product.id, `${type} stock adjustment: ${quantity} g — ${reason.trim()}`);
+}
+
+/**
+ * Production products can be hard-deleted only when no growing batch references them.
+ * If a batch reference exists, retain the master record and soft-delete it by making it inactive.
+ */
+export async function deleteOrDeactivateProduct(id: string) {
+  const snapshot = await getDocs(collection(db, "growingBatches"));
+  const referenced = snapshot.docs.some((item) => {
+    const data = item.data() as { items?: Array<{ productId?: string }> };
+    return (data.items ?? []).some((batchItem) => batchItem.productId === id);
+  });
+
+  if (referenced) {
+    await updateRecord("products", id, { status: "inactive" });
+    await auditEvent("deactivate", "products", id, "Production product retained and deactivated because it is referenced by a growing batch.");
+    return { action: "deactivated" as const };
+  }
+
+  await deleteRecord("products", id);
+  return { action: "deleted" as const };
 }

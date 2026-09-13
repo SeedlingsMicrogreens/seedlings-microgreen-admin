@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { listCollection } from "@/lib/firestore";
 import { adjustGrowingBatchStock } from "@/lib/growingBatchService";
-import { confirmAction, showError, showSuccess } from "@/lib/alerts";
+import { confirmAction, showError, showToast } from "@/lib/alerts";
 import { useAuth } from "@/components/auth/AuthProvider";
 import type { InventoryAdjustment, Product } from "@/types/catalog";
 import type { GrowingBatch } from "@/types/growingBatch";
@@ -64,7 +64,7 @@ export default function InventoryPage() {
     setSavingBatch(true); setError("");
     try {
       await adjustGrowingBatchStock(selectedBatch, batchQuantities, user.uid, user.email ?? undefined);
-      await showSuccess("Batch stock saved", `${selectedBatch.batchNumber} has been marked as adjusted.`);
+      showToast(`${selectedBatch.batchNumber} stock saved successfully.`);
       setSelectedBatchId(""); setBatchQuantities({}); await load();
     } catch (e) { await showError(e, "Unable to save batch-wise stock."); }
     finally { setSavingBatch(false); }

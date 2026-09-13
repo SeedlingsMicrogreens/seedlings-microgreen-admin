@@ -67,7 +67,7 @@ export default function SubscriptionsPage() {
 
   async function changeStatus(sub: Subscription, next: SubscriptionStatus) {
     if (!user) return;
-    if (next === "cancelled" && !(await confirmAction({title:"Cancel this subscription?",text:"This will stop the active subscription.",confirmText:"Yes, cancel"}))) return;
+    if (next === "cancelled" && !(await confirmAction({title:"Cancel this subscription?",text:"This will stop the active subscription. This action cannot be undone from this confirmation.",confirmText:"Yes, cancel"}))) return;
     try {
       await updateSubscriptionStatus(sub, next, user.uid, user.email ?? undefined);
       setSelected({ ...sub, status: next });

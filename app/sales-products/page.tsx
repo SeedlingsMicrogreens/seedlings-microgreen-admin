@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { ImageGalleryUploader } from "@/components/ui/ImageGalleryUploader";
 import { RichTextEditor } from "@/components/ui/RichTextEditor";
-import { createSalesProduct, deleteSalesProduct, listSalesProducts, updateSalesProduct, validateSalesProduct } from "@/lib/salesProductService";
+import { createSalesProduct, deleteOrDeactivateSalesProduct, listSalesProducts, updateSalesProduct, validateSalesProduct } from "@/lib/salesProductService";
 import { listCollection } from "@/lib/firestore";
 import type { Product } from "@/types/catalog";
 import type { SalesProduct, SalesProductComponent, SalesProductType } from "@/types/salesProduct";
@@ -132,14 +132,14 @@ export default function SalesProductsPage() {
       return { ...c, productName: p?.name ?? c.productName, productSku: p?.sku ?? c.productSku, quantityGrams: Number(c.quantityGrams) };
     });
     try {
-      validateSalesProduct({ ...form, components, mrp: Number(form.mrp), sellingPrice: Number(form.sellingPrice) });
+      validateSalesProduct({ ...form, imageUrl: form.imageUrl, components, mrp: Number(form.mrp), sellingPrice: Number(form.sellingPrice) });
       const sku = form.sku.trim();
       const duplicate = salableProducts.some(x => x.id !== editing && String(x.sku ?? "").trim().toLowerCase() === sku.toLowerCase() && Boolean(sku));
       if (duplicate) throw new Error("Salable Product SKU must be unique.");
       const data = {
         name: form.name.trim(), sku: sku || undefined, slug: sanitizeSlug(form.slug.trim()) || slugify(form.name),
         description: form.description.trim() || undefined, shortDescription: form.shortDescription.trim() || undefined,
-        imageUrl: form.imageUrl || undefined, type: form.type, components,
+        imageUrl: form.imageUrl.trim(), type: form.type, components,
         mrp: Number(form.mrp), sellingPrice: Number(form.sellingPrice), currency: "INR", oneTimePurchase: form.oneTimePurchase,
         subscriptionPurchase: form.subscriptionPurchase, active: form.active, featured: form.featured, sortOrder: Number(form.sortOrder)
       };
@@ -151,8 +151,18 @@ export default function SalesProductsPage() {
   }
 
   async function remove(id: string) {
-    if (!(await confirmAction({title:"Delete this Salable Product?",text:"Only delete it when it has no dependent orders or subscriptions.",confirmText:"Yes, delete"}))) return;
-    try { await deleteSalesProduct(id); await load(); } catch (e) { setError(e instanceof Error ? e.message : "Unable to delete salable product."); }
+    if (!(await confirmAction({
+      title:"Delete this Salable Product?",
+      text:"This action cannot be undone. If this product is referenced by an order, subscription, or subscription delivery, it will be retained and deactivated instead of being permanently deleted.",
+      confirmText:"Yes, delete",
+    }))) return;
+    try {
+      const result = await deleteOrDeactivateSalesProduct(id);
+      await load();
+      setError(result.action === "deactivated"
+        ? "Salable Product has existing references, so it was deactivated instead of deleted."
+        : "");
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to delete salable product."); }
   }
 
   const selectedSingle = form.type === "single" ? form.components[0]?.productId ?? "" : "";
@@ -189,7 +199,7 @@ export default function SalesProductsPage() {
 
           <div className="row g-3"><div className="col-md-6"><label className="form-label">Salable Product Name *</label><input className="form-control" value={form.name} onChange={e => changeName(e.target.value)} required placeholder="e.g. Broccoli 200gms" /></div><div className="col-md-6"><label className="form-label">SKU / Code</label><input className="form-control" value={form.sku} onChange={e => { setSkuTouched(true); setForm({...form,sku:e.target.value}); }} placeholder="e.g. SP-BRO-200" /></div><div className="col-md-6"><label className="form-label">Slug</label><input className="form-control" value={form.slug} onChange={e => { setSlugTouched(true); setForm({...form,slug:sanitizeSlug(e.target.value)}); }} placeholder="e.g. broccoli-microgreens" inputMode="text" autoCapitalize="none" spellCheck={false} /><div className="form-text">Lowercase letters, hyphen (-) and underscore (_) only. Spaces and other characters are not allowed.</div></div><div className="col-12"><label className="form-label">Short Description</label><RichTextEditor value={form.shortDescription} onChange={(html) => setForm({...form, shortDescription: html})} placeholder="Short salable product description..." minHeight={100} /></div><div className="col-12"><label className="form-label">Description</label><RichTextEditor value={form.description} onChange={(html) => setForm({...form, description: html})} placeholder="Detailed salable product description..." minHeight={180} /></div></div>
         </div></div>
-        <div className="card border mt-4"><div className="card-header"><strong>Salable Product Image</strong></div><div className="card-body"><ImageGalleryUploader value={form.imageUrl ? [form.imageUrl] : []} onChange={urls => setForm({...form,imageUrl:urls[0] ?? ""})} validation={{ exactWidth: 1200, exactHeight: 1200, maxBytes: 1024 * 1024, allowedTypes: ["image/png", "image/jpeg"] }} guidance={<><strong>Image Requirements:</strong> 1200 × 1200 px (1:1) square image, PNG/JPG/JPEG. Ideal file size: 150–400 KB. Up to ~700 KB is recommended; images above 1 MB are not accepted.</>} /></div></div>
+        <div className="card border mt-4"><div className="card-header"><strong>Salable Product Image *</strong></div><div className="card-body"><ImageGalleryUploader value={form.imageUrl ? [form.imageUrl] : []} onChange={urls => setForm({...form,imageUrl:urls[0] ?? ""})} validation={{ exactWidth: 1200, exactHeight: 1200, maxBytes: 1024 * 1024, allowedTypes: ["image/png", "image/jpeg"] }} guidance={<><strong>Required image.</strong> <span className="text-danger">A Salable Product cannot be saved without a product image.</span><br/><strong>Image Requirements:</strong> 1200 × 1200 px (1:1) square image, PNG/JPG/JPEG. Ideal file size: 150–400 KB. Up to ~700 KB is recommended; images above 1 MB are not accepted.</>} /></div></div>
       </div><div className="col-lg-5"><div className="card border"><div className="card-header"><strong>Price & Purchase</strong></div><div className="card-body"><div className="row g-3 mb-2"><div className="col-sm-6"><label className="form-label">MRP (₹) *</label><input className="form-control" type="number" min="0.01" step="0.01" value={form.mrp} onChange={e=>setForm({...form,mrp:Number(e.target.value)})}/><div className="form-text">Original/reference price shown to customers.</div></div><div className="col-sm-6"><label className="form-label">Selling Price (₹) *</label><input className="form-control" type="number" min="0.01" step="0.01" value={form.sellingPrice} onChange={e=>setForm({...form,sellingPrice:Number(e.target.value)})}/><div className="form-text">Actual price the customer pays.</div></div></div>{Number(form.mrp) > Number(form.sellingPrice) && Number(form.sellingPrice) > 0 && <div className="alert alert-success py-2 mb-3"><strong>Customer saving:</strong> ₹{(Number(form.mrp) - Number(form.sellingPrice)).toLocaleString("en-IN")}</div>}{form.type === "single" && form.components[0] && <div className="form-text mb-3">Default MRP and selling price are fetched from <strong>{form.components[0].productName}</strong>. You can change them for this salable product.</div>}{form.type === "multiple" && <div className="form-text mb-3">Set the selling price for this combo.</div>}<div className="form-check mb-2"><input className="form-check-input" type="checkbox" id="one-time" checked={form.oneTimePurchase} onChange={e=>setForm({...form,oneTimePurchase:e.target.checked})}/><label className="form-check-label" htmlFor="one-time">Available for one-time purchase</label></div><div className="form-check"><input className="form-check-input" type="checkbox" id="subscription" checked={form.subscriptionPurchase} onChange={e=>setForm({...form,subscriptionPurchase:e.target.checked})}/><label className="form-check-label" htmlFor="subscription">Available for subscription</label></div></div></div><div className="card border mt-4"><div className="card-header"><strong>Status</strong></div><div className="card-body"><div className="form-check mb-2"><input className="form-check-input" type="checkbox" id="active" checked={form.active} onChange={e=>setForm({...form,active:e.target.checked})}/><label className="form-check-label" htmlFor="active">Active and available</label></div><div className="form-check mb-3"><input className="form-check-input" type="checkbox" id="featured" checked={form.featured} onChange={e=>setForm({...form,featured:e.target.checked})}/><label className="form-check-label" htmlFor="featured">Featured</label></div><label className="form-label">Sort order</label><input className="form-control" type="number" step="1" value={form.sortOrder} onChange={e=>setForm({...form,sortOrder:Number(e.target.value)})}/></div></div></div></div></div><div className="card-footer d-flex justify-content-end gap-2"><button type="button" className="btn btn-secondary" onClick={reset}>Cancel</button><button className="btn btn-success" disabled={saving || loading}>{saving ? "Saving..." : editing ? "Update Salable Product" : "Create Salable Product"}</button></div></div></form>}
   </div></AdminPage>;
 }

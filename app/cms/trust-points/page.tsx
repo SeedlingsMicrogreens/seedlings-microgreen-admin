@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { createRecord, listCollectionByField, updateRecord } from "@/lib/firestore";
+import { showSuccess } from "@/lib/alerts";
 
 const FIXED = [
   ["fresh", "Fresh to order"],
@@ -44,6 +45,7 @@ export default function TrustPointsPage() {
       if (form.id) await updateRecord("websiteTrustPoints", form.id, payload);
       else await createRecord("websiteTrustPoints", payload);
       await load();
+      await showSuccess("Trust Point saved");
     } catch {
       setError("Unable to save Trust Point.");
     } finally {

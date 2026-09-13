@@ -9,4 +9,8 @@ export async function createDeliveryCharge(input: Omit<DeliveryCharge,"id"|"crea
 export async function updateDeliveryCharge(id:string,input:Partial<DeliveryCharge>) {
   return updateRecord("deliveryCharges",id,input as Record<string,unknown>);
 }
-export async function deleteDeliveryCharge(id:string) { return deleteRecord("deliveryCharges",id); }
+export async function deleteDeliveryCharge(id:string) {
+  // Delivery charges are retained as inactive masters so historical orders can
+  // continue to reference their snapshot/charge identity.
+  return updateRecord("deliveryCharges", id, { active: false });
+}
