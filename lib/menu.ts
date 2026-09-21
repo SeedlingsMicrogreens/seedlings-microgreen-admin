@@ -11,17 +11,7 @@ export const menuItems: MenuNode[] = [
       { type: "item", text: "Customers", href: "/customers", icon: "bi-people" },
       { type: "item", text: "Orders", href: "/orders", icon: "bi-cart3" },
       { type: "item", text: "Subscriptions", href: "/subscriptions", icon: "bi-arrow-repeat" },
-      { type: "item", text: "Customer Contact Required", href: "/customer-contact-required", icon: "bi-person-lines-fill" },
-    ],
-  },
-
-  {
-    type: "group",
-    text: "Products",
-    icon: "bi-box-seam",
-    children: [
-      { type: "item", text: "Products", href: "/products", icon: "bi-box-seam" },
-      { type: "item", text: "Salable Products", href: "/sales-products", icon: "bi-bag-check" },
+      { type: "item", text: "Enquiries", href: "/customer-contact-required", icon: "bi-person-lines-fill" },
     ],
   },
 
@@ -79,12 +69,15 @@ export const menuItems: MenuNode[] = [
 
   {
     type: "group",
-    text: "Settings & Administration",
+    text: "Masters",
     icon: "bi-shield-lock",
     children: [
-      { type: "item", text: "Subscription & Delivery Masters", href: "/subscription-masters", icon: "bi-sliders" },
-      { type: "item", text: "Geolocation Master", href: "/geolocations", icon: "bi-geo-alt" },
-      { type: "item", text: "Locations", href: "/locations", icon: "bi-pin-map" },
+      { type: "item", text: "Products", href: "/products", icon: "bi-box-seam" },
+      { type: "item", text: "Salable Products", href: "/sales-products", icon: "bi-bag-check" },
+      { type: "item", text: "Subscription Plans", href: "/subscription-masters", icon: "bi-arrow-repeat" },
+      { type: "item", text: "Delivery Charges", href: "/delivery-masters", icon: "bi-truck" },
+      { type: "item", text: "Pincode Master", href: "/geolocations", icon: "bi-geo-alt" },
+      { type: "item", text: "Rack Locations", href: "/locations", icon: "bi-pin-map" },
       { type: "item", text: "Admin Users", href: "/admin-users", icon: "bi-people" },
       { type: "item", text: "Audit Log", href: "/audit-log", icon: "bi-journal-text" },
       { type: "item", text: "System Settings", href: "/settings", icon: "bi-gear" },

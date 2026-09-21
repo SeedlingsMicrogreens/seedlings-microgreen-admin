@@ -2,6 +2,9 @@ export type SubscriptionFrequency = "monthly" | "quarterly" | "half_yearly" | "y
 
 export type SubscriptionPlan = {
   id: string;
+  /** Salable product this subscription plan is offered for. */
+  salableProductId: string;
+  salableProductName: string;
   name: string;
   frequency: SubscriptionFrequency;
   deliveriesPerTerm: number;

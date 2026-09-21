@@ -82,7 +82,7 @@ export default function CustomerContactRequiredPage() {
     <div className="container-fluid py-3">
       <div className="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-3">
         <div>
-          <h1 className="h3 seedlings-brand mb-1">Customer Contact Required</h1>
+          <h1 className="h3 seedlings-brand mb-1">Enquiries</h1>
           <p className="text-muted mb-0">Orders where the customer asked to be contacted or delivery quantity needs manual confirmation.</p>
         </div>
         <div className="d-flex align-items-center gap-2">
@@ -102,7 +102,15 @@ export default function CustomerContactRequiredPage() {
         </div>
         <div className="table-responsive">
           <table className="table table-hover align-middle mb-0">
-            <thead><tr><th>Order</th><th>Customer</th><th>Type</th><th>Delivery</th><th>Issue</th><th>Status</th><th className="text-end">Action</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Order</th>
+                <th>Customer</th>
+                <th>Type</th>
+                <th>Delivery</th>
+                <th className="text-end">Action</th>
+              </tr>
+            </thead>
             <tbody>
               {filtered.map((order) => {
                 const customer = customerMap.get(order.customerId);
@@ -111,8 +119,6 @@ export default function CustomerContactRequiredPage() {
                   <td><strong>{order.customerName || customer?.name || "Unnamed customer"}</strong><div className="small text-muted">{order.customerMobile || customer?.mobileNumber || "—"}</div></td>
                   <td>{order.orderType === "subscription" ? <><span className="badge text-bg-primary">Subscription</span><div className="small text-muted">{order.subscriptionPlanName || "—"}</div></> : <span className="badge text-bg-light">One-time</span>}</td>
                   <td>{dateOnly(order.scheduledDeliveryDate || order.deliveryDate)}</td>
-                  <td><span className="text-warning-emphasis"><i className="bi bi-exclamation-circle me-1" />{contactReason(order)}</span></td>
-                  <td><span className="badge text-bg-warning">Pending Contact</span></td>
                   <td className="text-end"><button className="btn btn-sm btn-outline-primary" onClick={() => setSelected(order)}>View</button></td>
                 </tr>;
               })}
