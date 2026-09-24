@@ -195,7 +195,7 @@ export default function ProductsPage() {
 
   async function remove(id: string) {
     if (!(await confirmAction({
-      title:"Delete this production product?",
+      title:"Delete this Microgreen?",
       text:"This action cannot be undone. If this product is referenced by a growing batch, it will be retained and deactivated instead of being permanently deleted.",
       confirmText:"Yes, delete",
     }))) return;
@@ -215,12 +215,12 @@ export default function ProductsPage() {
       <div className="container-fluid py-3">
         <div className="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
           <div>
-            <h1 className="h3 seedlings-brand mb-1">Products</h1>
-            <p className="text-muted mb-0">Production Product Master — manage what Seedlings grows.</p>
+            <h1 className="h3 seedlings-brand mb-1">Microgreen</h1>
+            <p className="text-muted mb-0">Microgreen Master — manage what Seedlings grows.</p>
           </div>
           {tab === "list" && (
             <button className="btn btn-success" onClick={openCreate}>
-              <i className="bi bi-plus-lg me-1" />Add Product
+              <i className="bi bi-plus-lg me-1" />Add Microgreen
             </button>
           )}
         </div>
@@ -238,13 +238,13 @@ export default function ProductsPage() {
         <ul className="nav nav-tabs mb-3">
           <li className="nav-item">
             <button className={`nav-link ${tab === "list" ? "active" : ""}`} onClick={() => setTab("list")}>
-              <i className="bi bi-grid-3x3-gap me-1" />Product Master
+              <i className="bi bi-grid-3x3-gap me-1" />Microgreen
             </button>
           </li>
           <li className="nav-item">
             <button className={`nav-link ${tab === "form" ? "active" : ""}`} onClick={() => setTab("form")}>
               <i className={`bi ${editing ? "bi-pencil-square" : "bi-plus-square"} me-1`} />
-              {editing ? "Edit Product" : "Create Product"}
+              {editing ? "Edit Microgreen" : "Create Microgreen"}
             </button>
           </li>
         </ul>
@@ -295,12 +295,7 @@ export default function ProductsPage() {
                     return (
                       <tr key={product.id}>
                         <td>
-                          <div className="d-flex align-items-center gap-2">
-                            <div className="border rounded d-flex align-items-center justify-content-center text-muted" style={{ width: 48, height: 48 }}>
-                              <i className="bi bi-seedling" />
-                            </div>
-                            <div><strong>{product.name}</strong><div className="small text-muted">{product.category}</div></div>
-                          </div>
+                          <div><strong>{product.name}</strong><div className="small text-muted">{product.category}</div></div>
                         </td>
                         <td>{product.sku || "—"}</td>
                         <td>{Number(product.growingCycleDays ?? 0)} days</td>
@@ -317,7 +312,7 @@ export default function ProductsPage() {
                       </tr>
                     );
                   })}
-                  {!loading && !filtered.length && <tr><td colSpan={8} className="text-center text-muted py-4">No production products found.</td></tr>}
+                  {!loading && !filtered.length && <tr><td colSpan={8} className="text-center text-muted py-4">No microgreens found.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -387,7 +382,7 @@ export default function ProductsPage() {
                         <div className="alert alert-light border mb-3">
                           <div className="small text-muted">Actual usable stock</div>
                           <div className="h4 mb-1">{stockValue(form as Product).toLocaleString()} gms</div>
-                          <div className="small">This value is updated by actual harvest. It cannot be edited from Product Master.</div>
+                          <div className="small">This value is updated by actual harvest. It cannot be edited from Microgreen.</div>
                         </div>
                         <label className="form-label">Low-stock threshold (gms) *</label>
                         <input className="form-control" type="number" min="0" step="1" value={form.lowStockThresholdGrams} onChange={(e) => setForm({ ...form, lowStockThresholdGrams: Number(e.target.value) })} />
@@ -415,7 +410,7 @@ export default function ProductsPage() {
               </div>
               <div className="card-footer d-flex justify-content-end gap-2">
                 <button type="button" className="btn btn-secondary" onClick={cancel}>Cancel</button>
-                <button className="btn btn-success" disabled={saving || loading}>{saving ? "Saving..." : editing ? "Update Product" : "Create Product"}</button>
+                <button className="btn btn-success" disabled={saving || loading}>{saving ? "Saving..." : editing ? "Update Microgreen" : "Create Microgreen"}</button>
               </div>
             </div>
           </form>

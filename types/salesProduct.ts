@@ -5,6 +5,8 @@ export type SalesProductComponent = {
   productName: string;
   productSku?: string;
   quantityGrams: number;
+  /** For combo Products, the microgreen share as a percentage of the total pack. */
+  percentage?: number;
 };
 
 export type SalesProduct = {

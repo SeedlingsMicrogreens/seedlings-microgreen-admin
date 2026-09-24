@@ -72,10 +72,10 @@ export const menuItems: MenuNode[] = [
     text: "Masters",
     icon: "bi-shield-lock",
     children: [
-      { type: "item", text: "Products", href: "/products", icon: "bi-box-seam" },
-      { type: "item", text: "Salable Products", href: "/sales-products", icon: "bi-bag-check" },
+      { type: "item", text: "Microgreen", href: "/products", icon: "bi-box-seam" },
+      { type: "item", text: "Products", href: "/sales-products", icon: "bi-bag-check" },
+      { type: "item", text: "Packaging Master", href: "/packaging-masters", icon: "bi-box2" },
       { type: "item", text: "Subscription Plans", href: "/subscription-masters", icon: "bi-arrow-repeat" },
-      { type: "item", text: "Delivery Charges", href: "/delivery-masters", icon: "bi-truck" },
       { type: "item", text: "Pincode Master", href: "/geolocations", icon: "bi-geo-alt" },
       { type: "item", text: "Rack Locations", href: "/locations", icon: "bi-pin-map" },
       { type: "item", text: "Admin Users", href: "/admin-users", icon: "bi-people" },

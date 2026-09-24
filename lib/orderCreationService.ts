@@ -3,7 +3,6 @@ import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { storage, auth } from "./firebase";
 import type { Customer } from "@/types/customer";
 import type { SalesProduct } from "@/types/salesProduct";
-import type { DeliveryCharge } from "@/types/deliveryCharge";
 
 export async function uploadOrderPaymentReceipt(orderId: string, file: File, transactionKey?: string) {
   if (!file) return null;
@@ -22,7 +21,7 @@ export async function uploadOrderPaymentReceipt(orderId: string, file: File, tra
 export async function createAdminOrder(args: {
   customer: Customer;
   items: { salableProduct: SalesProduct; quantity: number; imageUrl?: string }[];
-  deliveryCharge?: DeliveryCharge | null;
+  deliveryCharge?: { id: string; name: string; amount: number } | null;
   scheduledDeliveryDate?: string;
   notes?: string;
   amountPaid?: number;
@@ -57,7 +56,7 @@ export async function createAdminOrder(args: {
   }));
 
   const subtotal = items.reduce((n, x) => n + x.lineTotal, 0);
-  const deliveryFee = args.deliveryCharge?.mode === "free" ? 0 : Number(args.deliveryCharge?.amount || 0);
+  const deliveryFee = Number(args.deliveryCharge?.amount || 0);
   const orderNumber = `ORD-${Date.now().toString(36).toUpperCase()}`;
   const transactionId = args.transactionId?.trim() || "";
   const actor = auth.currentUser;

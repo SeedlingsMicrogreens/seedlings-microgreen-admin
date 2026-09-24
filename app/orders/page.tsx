@@ -10,7 +10,7 @@ import type { Order, OrderStatus } from "@/types/order";
 import { ORDER_STATUSES, formatOrderStatus } from "@/types/order";
 import type { Customer } from "@/types/customer";
 import type { SalesProduct } from "@/types/salesProduct";
-import type { DeliveryCharge } from "@/types/deliveryCharge";
+import type { Geolocation } from "@/types/geolocation";
 import { formatAddressLines } from "@/lib/address";
 import { promptText, showError, showSuccess } from "@/lib/alerts";
 
@@ -36,7 +36,7 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [salableProducts, setSalableProducts] = useState<SalesProduct[]>([]);
-  const [charges, setCharges] = useState<DeliveryCharge[]>([]);
+  const [geolocations, setGeolocations] = useState<Geolocation[]>([]);
   const [tab, setTab] = useState<"list" | "create">("list");
   const [filter, setFilter] = useState<"all" | OrderStatus | "one_time" | "subscription">("all");
   const [search, setSearch] = useState("");
@@ -51,9 +51,9 @@ export default function OrdersPage() {
         listCollection<Order>("orders", "createdAt"),
         listCollection<Customer>("customers", "updatedAt"),
         listCollection<SalesProduct>("salesProducts", "updatedAt"),
-        listCollection<DeliveryCharge>("deliveryCharges", "updatedAt"),
+        listCollection<Geolocation>("geolocations", "updatedAt"),
       ]);
-      setOrders(o); setCustomers(c); setSalableProducts(p); setCharges(d); setError("");
+      setOrders(o); setCustomers(c); setSalableProducts(p); setGeolocations(d); setError("");
     } catch (e) {
       setError("Unable to load orders.");
       await showError(e, "Unable to load orders.");
@@ -83,7 +83,7 @@ export default function OrdersPage() {
       <li className="nav-item"><button className={`nav-link ${tab === "create" ? "active" : ""}`} onClick={() => setTab("create")}><i className="bi bi-plus-lg me-1" />Create One-time Order</button></li>
     </ul>
     {tab === "create"
-      ? <CreateOrder customers={customers} salableProducts={salableProducts} charges={charges} onCancel={() => setTab("list")} onSaved={async () => { await load(); setTab("list"); await showSuccess("One-time order created successfully."); }} />
+      ? <CreateOrder customers={customers} salableProducts={salableProducts} geolocations={geolocations} onCancel={() => setTab("list")} onSaved={async () => { await load(); setTab("list"); await showSuccess("One-time order created successfully."); }} />
       : <ListOrders orders={filtered} loading={loading} search={search} setSearch={setSearch} filter={filter} setFilter={setFilter} selected={selected} setSelected={setSelected} user={user} onChanged={load} />}
   </div></AdminPage>;
 }
@@ -195,14 +195,13 @@ function ListOrders({ orders, loading, search, setSearch, filter, setFilter, sel
   </>;
 }
 
-function CreateOrder({ customers, salableProducts, charges, onCancel, onSaved }: {
-  customers: Customer[]; salableProducts: SalesProduct[]; charges: DeliveryCharge[]; onCancel: () => void; onSaved: () => Promise<void>;
+function CreateOrder({ customers, salableProducts, geolocations, onCancel, onSaved }: {
+  customers: Customer[]; salableProducts: SalesProduct[]; geolocations: Geolocation[]; onCancel: () => void; onSaved: () => Promise<void>;
 }) {
   type DraftItem = { salableProductId: string; quantity: number };
 
   const [customerId, setCustomerId] = useState("");
   const [items, setItems] = useState<DraftItem[]>([{ salableProductId: "", quantity: 1 }]);
-  const [chargeId, setChargeId] = useState("");
   const [date, setDate] = useState("");
   const [notes, setNotes] = useState("");
   const [amountPaid, setAmountPaid] = useState("");
@@ -212,8 +211,13 @@ function CreateOrder({ customers, salableProducts, charges, onCancel, onSaved }:
 
   const customer = customers.find(c => c.id === customerId);
   const activeProducts = salableProducts.filter(p => p.active && p.oneTimePurchase);
-  const activeCharges = charges.filter(c => c.active && c.scope === "one_time_order");
-  const charge = activeCharges.find(c => c.id === chargeId);
+  const deliveryLocation = customer?.addresses?.[0]?.pincode
+    ? geolocations.find(g => g.active && g.pincode === customer.addresses?.[0]?.pincode)
+    : undefined;
+  const deliveryFee = Number(deliveryLocation?.deliveryCharge || 0);
+  const deliveryCharge = deliveryLocation
+    ? { id: deliveryLocation.id, name: deliveryLocation.pincode, amount: deliveryFee }
+    : null;
 
   const resolvedItems = items.map(item => ({
     ...item,
@@ -221,8 +225,7 @@ function CreateOrder({ customers, salableProducts, charges, onCancel, onSaved }:
   }));
   const validItems = resolvedItems.filter((item): item is DraftItem & { salableProduct: SalesProduct } => Boolean(item.salableProduct));
   const subtotal = validItems.reduce((sum, item) => sum + Number(item.salableProduct.sellingPrice) * item.quantity, 0);
-  const fee = charge?.mode === "free" ? 0 : Number(charge?.amount || 0);
-  const total = subtotal + fee;
+  const total = subtotal + deliveryFee;
 
   function updateItem(index: number, patch: Partial<DraftItem>) {
     setItems(prev => prev.map((item, i) => i === index ? { ...item, ...patch } : item));
@@ -239,7 +242,7 @@ function CreateOrder({ customers, salableProducts, charges, onCancel, onSaved }:
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!customer) return showError("Select a customer.", "Customer required");
-    if (!validItems.length || validItems.length !== items.length) return showError("Select a salable product for every item row.", "Products required");
+    if (!validItems.length || validItems.length !== items.length) return showError("Select a product for every item row.", "Products required");
     if (items.some(x => !Number.isInteger(x.quantity) || x.quantity < 1)) return showError("Each item quantity must be at least 1.", "Invalid quantity");
     if (!customer.addresses?.[0]) return showError("This customer has no saved delivery address. Add an address before creating the order.", "Delivery address required");
 
@@ -248,7 +251,7 @@ function CreateOrder({ customers, salableProducts, charges, onCancel, onSaved }:
       await createAdminOrder({
         customer,
         items: validItems.map(item => ({ salableProduct: item.salableProduct, quantity: item.quantity, imageUrl: item.salableProduct.imageUrl })),
-        deliveryCharge: charge || null,
+        deliveryCharge,
         scheduledDeliveryDate: date,
         notes,
         amountPaid: Number(amountPaid || 0),
@@ -276,7 +279,7 @@ function CreateOrder({ customers, salableProducts, charges, onCancel, onSaved }:
               <div className="card-header"><strong>1. Customer</strong></div>
               <div className="card-body">
                 <label className="form-label">Customer *</label>
-                <select className="form-select" value={customerId} onChange={e => { setCustomerId(e.target.value); setChargeId(""); }} required>
+                <select className="form-select" value={customerId} onChange={e => { setCustomerId(e.target.value); }} required>
                   <option value="">Select customer...</option>
                   {customers.map(c => <option key={c.id} value={c.id}>{customerLabel(c)}{c.name?.trim() && customerMobile(c) ? ` — ${customerMobile(c)}` : ""}</option>)}
                 </select>
@@ -302,13 +305,13 @@ function CreateOrder({ customers, salableProducts, charges, onCancel, onSaved }:
           <div className="col-12">
             <div className="card border">
               <div className="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
-                <div><strong>3. Products</strong><div className="small text-muted">Add one or more Salable Products to the same order.</div></div>
+                <div><strong>3. Products</strong><div className="small text-muted">Add one or more Products to the same order.</div></div>
                 <button type="button" className="btn btn-sm btn-outline-primary" onClick={addItem}><i className="bi bi-plus-lg me-1" />Add Product</button>
               </div>
               <div className="card-body">
                 <div className="table-responsive">
                   <table className="table align-middle mb-0">
-                    <thead><tr><th style={{ minWidth: 330 }}>Salable Product</th><th style={{ width: 150 }}>Quantity</th><th style={{ width: 150 }} className="text-end">Unit Price</th><th style={{ width: 160 }} className="text-end">Line Total</th><th style={{ width: 60 }} /></tr></thead>
+                    <thead><tr><th style={{ minWidth: 330 }}>Product</th><th style={{ width: 150 }}>Quantity</th><th style={{ width: 150 }} className="text-end">Unit Price</th><th style={{ width: 160 }} className="text-end">Line Total</th><th style={{ width: 60 }} /></tr></thead>
                     <tbody>
                       {items.map((item, index) => {
                         const product = activeProducts.find(p => p.id === item.salableProductId);
@@ -316,7 +319,7 @@ function CreateOrder({ customers, salableProducts, charges, onCancel, onSaved }:
                         return <tr key={`${index}-${item.salableProductId}`}>
                           <td>
                             <select className="form-select" value={item.salableProductId} onChange={e => updateItem(index, { salableProductId: e.target.value })} required>
-                              <option value="">Select salable product...</option>
+                              <option value="">Select product...</option>
                               {activeProducts.map(p => <option key={p.id} value={p.id} disabled={usedByOtherRow.has(p.id)}>{p.name}{p.sku ? ` (${p.sku})` : ""} — {money(Number(p.sellingPrice))}</option>)}
                             </select>
                             {product && <div className="small text-muted mt-1">{product.type === "multiple" ? "Combo" : "Single"} · {product.components.map(c => `${c.productName} ${c.quantityGrams} gms`).join(" + ")}</div>}
@@ -330,14 +333,14 @@ function CreateOrder({ customers, salableProducts, charges, onCancel, onSaved }:
                     </tbody>
                   </table>
                 </div>
-                <div className="small text-muted mt-3"><i className="bi bi-info-circle me-1" />The customer can have multiple different Salable Products in one one-time order.</div>
+                <div className="small text-muted mt-3"><i className="bi bi-info-circle me-1" />The customer can have multiple different Products in one one-time order.</div>
               </div>
             </div>
           </div>
 
           <div className="col-lg-4">
             <div className="card border h-100"><div className="card-header"><strong>4. Delivery</strong></div><div className="card-body">
-              <label className="form-label">Delivery charge</label><select className="form-select mb-3" value={chargeId} onChange={e => setChargeId(e.target.value)}><option value="">No charge selected</option>{activeCharges.map(c => <option key={c.id} value={c.id}>{c.name} — {c.mode === "free" ? "Free" : money(c.amount)}</option>)}</select>
+              <label className="form-label">Delivery charge</label><div className="form-control bg-light mb-3">{deliveryLocation ? money(deliveryFee) : customer ? "No delivery charge configured for this pincode" : "Select a customer"}</div>
               <label className="form-label">Scheduled delivery</label><input className="form-control" type="date" value={date} onChange={e => setDate(e.target.value)} />
             </div></div>
           </div>
@@ -353,7 +356,7 @@ function CreateOrder({ customers, salableProducts, charges, onCancel, onSaved }:
           </div>
 
           <div className="col-lg-7"><div className="card border"><div className="card-header"><strong>6. Notes</strong></div><div className="card-body"><textarea className="form-control" rows={4} placeholder="Optional order / delivery notes" value={notes} onChange={e => setNotes(e.target.value)} /></div></div></div>
-          <div className="col-lg-5"><div className="card border h-100"><div className="card-header"><strong>Order Summary</strong></div><div className="card-body"><div className="d-flex justify-content-between mb-2"><span>Products ({validItems.length})</span><strong>{money(subtotal)}</strong></div><div className="d-flex justify-content-between mb-2"><span>Delivery</span><strong>{money(fee)}</strong></div><div className="d-flex justify-content-between border-top pt-2 mt-2"><span><strong>Total</strong></span><strong>{money(total)}</strong></div><div className="d-flex justify-content-between mt-2"><span>Paid now</span><strong className="text-success">{money(Number(amountPaid || 0))}</strong></div><div className="d-flex justify-content-between mt-1"><span>Balance due</span><strong className="text-danger">{money(Math.max(0, total - Number(amountPaid || 0)))}</strong></div><div className="small text-muted mt-3">Payment status is Pending, Partially paid, or Paid based on the amount collected. Any balance can be collected later in multiple payments.</div></div></div></div>
+          <div className="col-lg-5"><div className="card border h-100"><div className="card-header"><strong>Order Summary</strong></div><div className="card-body"><div className="d-flex justify-content-between mb-2"><span>Products ({validItems.length})</span><strong>{money(subtotal)}</strong></div><div className="d-flex justify-content-between mb-2"><span>Delivery</span><strong>{money(deliveryFee)}</strong></div><div className="d-flex justify-content-between border-top pt-2 mt-2"><span><strong>Total</strong></span><strong>{money(total)}</strong></div><div className="d-flex justify-content-between mt-2"><span>Paid now</span><strong className="text-success">{money(Number(amountPaid || 0))}</strong></div><div className="d-flex justify-content-between mt-1"><span>Balance due</span><strong className="text-danger">{money(Math.max(0, total - Number(amountPaid || 0)))}</strong></div><div className="small text-muted mt-3">Payment status is Pending, Partially paid, or Paid based on the amount collected. Any balance can be collected later in multiple payments.</div></div></div></div>
         </div>
       </div>
       <div className="card-footer bg-transparent px-0 d-flex justify-content-end gap-2"><button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button><button className="btn btn-success px-4" disabled={saving}>{saving ? <><span className="spinner-border spinner-border-sm me-2" />Creating...</> : <><i className="bi bi-check2-circle me-1" />Create One-time Order</>}</button></div>

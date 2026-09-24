@@ -136,7 +136,7 @@ export default function InventoryPage() {
                   <td>{p.name}</td><td className={Number(p.stockGrams ?? p.stock ?? 0) <= Number(p.lowStockThresholdGrams ?? p.lowStockThreshold ?? 0) ? "text-danger fw-bold" : ""}>{Number(p.stockGrams ?? p.stock ?? 0).toLocaleString()} gms</td>
                   <td>{Number(p.lowStockThresholdGrams ?? p.lowStockThreshold ?? 0).toLocaleString()} gms</td><td>{p.status}</td>
                 </tr>)}
-                {!products.length && <tr><td colSpan={4} className="text-center text-muted py-4">No products.</td></tr>}
+                {!products.length && <tr><td colSpan={4} className="text-center text-muted py-4">No microgreens.</td></tr>}
                 </tbody>
               </table>
             </div>

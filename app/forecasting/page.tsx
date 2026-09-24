@@ -140,7 +140,7 @@ export default function ForecastingPage() {
                 <tr>
                   <td colSpan={7} className="text-center text-muted py-5">
                     <i className="bi bi-bar-chart-line fs-2 d-block mb-2" />
-                    {onlyNeed ? "No products currently need additional growing." : "No production planning data available yet."}
+                    {onlyNeed ? "No microgreens currently need additional growing." : "No microgreen production planning data available yet."}
                   </td>
                 </tr>
               )}

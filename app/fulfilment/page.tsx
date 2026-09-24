@@ -174,7 +174,7 @@ export default function FulfilmentPage() {
         user.uid,
         user.email ?? undefined
       );
-      setMessage("Packing completed successfully. Production Product stock and Salable Product packed stock were updated atomically.");
+      setMessage("Packing completed successfully. Microgreen stock and Product packed stock were updated atomically.");
       setLines([newLine()]);
       await load();
     } catch (e) {
@@ -237,7 +237,7 @@ export default function FulfilmentPage() {
 
   // This is the persistent loose-stock view. It does not depend on the current worksheet.
   // Actual Produced = cumulative net usable grams recorded by harvested Growing Batch items.
-  // Packaging is split between Single Salable Products and Combo Salable Products.
+  // Packaging is split between Single Products and Combo Products.
   const productAvailableRows = useMemo(() => {
     const actualProduced = new Map<string, number>();
 
@@ -285,7 +285,7 @@ export default function FulfilmentPage() {
         <div className="mb-3">
           <h1 className="h3 seedlings-brand mb-1">Packing & Fulfilment</h1>
           <p className="text-muted mb-0">
-            Prepare multiple Salable Products in one packing worksheet and see the loose Production Product stock impact before saving.
+            Prepare multiple Products in one packing worksheet and see the loose Microgreen stock impact before saving.
           </p>
         </div>
 
@@ -343,14 +343,14 @@ export default function FulfilmentPage() {
           <form onSubmit={submit}>
             <div className="card-body">
               <div className="alert alert-info small">
-                Select a <strong>Salable Product</strong>, enter its <strong>Box Gms</strong> and <strong>Quantity</strong>. Box Gms must match the Salable Product recipe total. Combo recipes are expanded into their Production Products automatically.
+                Select a <strong>Product</strong>, enter its <strong>Box Gms</strong> and <strong>Quantity</strong>. Box Gms must match the Product recipe total. Combo recipes are expanded into their Microgreens automatically.
               </div>
 
               <div className="table-responsive">
                 <table className="table align-middle">
                   <thead>
                     <tr>
-                      <th style={{ minWidth: 300 }}>Salable Product</th>
+                      <th style={{ minWidth: 300 }}>Product</th>
                       <th style={{ width: 150 }}>Box Gms</th>
                       <th style={{ width: 150 }}>Quantity</th>
                       <th style={{ width: 60 }} />
@@ -373,7 +373,7 @@ export default function FulfilmentPage() {
                               onChange={(e) => updateLine(line.key, { salableProductId: e.target.value })}
                               required
                             >
-                              <option value="">Select Salable Product</option>
+                              <option value="">Select Product</option>
                               {salableProducts
                                 .filter((product) => product.active)
                                 .map((product) => (
@@ -438,7 +438,7 @@ export default function FulfilmentPage() {
                   <table className="table table-sm align-middle mb-0">
                     <thead>
                       <tr>
-                        <th>Production Product</th>
+                        <th>Microgreen</th>
                         <th className="text-end">Required Gms</th>
                         <th className="text-end">Available Gms</th>
                         <th className="text-end">Available After Packaging</th>
@@ -458,7 +458,7 @@ export default function FulfilmentPage() {
                       {!preview.rows.length && (
                         <tr>
                           <td colSpan={4} className="text-center text-muted py-3">
-                            Select Salable Products to see stock impact.
+                            Select Products to see stock impact.
                           </td>
                         </tr>
                       )}
@@ -474,7 +474,7 @@ export default function FulfilmentPage() {
               ))}
               {preview.hasShortage && (
                 <div className="alert alert-danger small mt-3 mb-0">
-                  One or more Production Products do not have enough loose stock. Nothing will be deducted until all rows can be packed.
+                  One or more Microgreens do not have enough loose stock. Nothing will be deducted until all rows can be packed.
                 </div>
               )}
             </div>
@@ -498,7 +498,7 @@ export default function FulfilmentPage() {
             <table className="table table-hover align-middle mb-0">
               <thead>
                 <tr>
-                  <th>Salable Product</th>
+                  <th>Product</th>
                   <th>Type</th>
                   <th className="text-end">Packed Units</th>
                 </tr>
@@ -516,7 +516,7 @@ export default function FulfilmentPage() {
                 ))}
                 {!loading && !salableProducts.length && (
                   <tr>
-                    <td colSpan={3} className="text-center text-muted py-4">No salable products found.</td>
+                    <td colSpan={3} className="text-center text-muted py-4">No products found.</td>
                   </tr>
                 )}
               </tbody>
@@ -532,7 +532,7 @@ export default function FulfilmentPage() {
                 <thead>
                   <tr>
                     <th>Date</th>
-                    <th>Salable Product</th>
+                    <th>Product</th>
                     <th>Box Gms</th>
                     <th>Quantity Packed</th>
                     <th>Gram Stock Consumed</th>
@@ -601,7 +601,7 @@ export default function FulfilmentPage() {
                   ))}
                   {!loading && !productAvailableRows.length && (
                     <tr>
-                      <td colSpan={5} className="text-center text-muted py-4">No Production Products found.</td>
+                      <td colSpan={5} className="text-center text-muted py-4">No microgreens found.</td>
                     </tr>
                   )}
                 </tbody>

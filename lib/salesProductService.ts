@@ -37,8 +37,20 @@ export function validateSalesProduct(input: {
     if (!component.productId) throw new Error("Every component must have a production product.");
     if (seen.has(component.productId)) throw new Error("The same production product cannot be added twice.");
     seen.add(component.productId);
-    if (!Number.isInteger(component.quantityGrams) || component.quantityGrams <= 0) {
+    if (input.type === "multiple") {
+      const percentage = Number(component.percentage);
+      if (!Number.isInteger(percentage) || percentage <= 0 || percentage > 100) {
+        throw new Error("Each combo microgreen percentage must be a whole number between 1 and 100.");
+      }
+    } else if (!Number.isInteger(component.quantityGrams) || component.quantityGrams <= 0) {
       throw new Error("Component quantity must be a positive whole number of grams.");
+    }
+  }
+
+  if (input.type === "multiple") {
+    const totalPercentage = input.components.reduce((sum, component) => sum + Number(component.percentage ?? 0), 0);
+    if (totalPercentage !== 100) {
+      throw new Error(`Combo microgreen percentages must total exactly 100%. Current total is ${totalPercentage}%.`);
     }
   }
 
