@@ -2,51 +2,186 @@ import { collection, doc, runTransaction, serverTimestamp } from "firebase/fires
 import { db } from "./firebase";
 import { auditEvent } from "./firestore";
 import type { Product } from "@/types/catalog";
-import type { GrowingBatch, GrowingBatchItem, GrowingBatchStatus } from "@/types/growingBatch";
+import type {
+  GrowingBatch,
+  GrowingBatchItem,
+  GrowingBatchPhaseStatus,
+  GrowingBatchStatus,
+} from "@/types/growingBatch";
 
 function dateFromValue(value: string) {
   const d = new Date(`${value}T00:00:00`);
   if (Number.isNaN(d.getTime())) throw new Error("Invalid date.");
   return d;
 }
+
 export function addDays(date: string, days: number) {
-  const d = dateFromValue(date); d.setDate(d.getDate()+days); return d.toISOString().slice(0,10);
+  const d = dateFromValue(date);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
 }
-export function buildBatchItem(product: Product, startDate: string, trayCount: number): Omit<GrowingBatchItem,"id"> {
-  const trays=Math.max(1,Math.round(trayCount));
-  const cycle=Math.max(1,Math.round(Number(product.growingCycleDays??0)));
-  const yieldPerTray=Math.max(0,Math.round(Number(product.expectedYieldGramsPerTray??product.expectedYieldGramsPerBatch??0)));
-  const minPerTray=Math.max(0,Math.round(Number(product.minimumYieldGramsPerTray??product.minimumBatchYieldGrams??0)));
-  const lossPerTray=Math.max(0,Math.round(Number(product.expectedLossGramsPerTray??0)));
-  const expected=yieldPerTray*trays, loss=lossPerTray*trays;
+
+function phaseDays(product: Product, phaseName: string) {
+  const phase = product.growingPhases?.find(p =>
+    p.phase.toLowerCase().replace(/[^a-z]/g, "") === phaseName.toLowerCase().replace(/[^a-z]/g, "")
+  );
+  return Math.max(0, Math.round(Number(phase?.noOfDays ?? 0)));
+}
+
+export function calculateGrowingPhaseDates(product: Product, harvestDate: string) {
+  const lightDays = phaseDays(product, "Light Period");
+  const darkDays = phaseDays(product, "Dark Period");
+  const soakingDays = product.soakingRequired === false ? 0 : phaseDays(product, "Soaking");
+
+  const lightStart = addDays(harvestDate, -lightDays);
+  const darkStart = addDays(lightStart, -darkDays);
+  const soakingStart = addDays(darkStart, -soakingDays);
+  const soakingApplicable = product.soakingRequired !== false;
+
   return {
-    productId:product.id, productName:product.name, trayCount:trays, startDate,
-    growingCycleDays:cycle, expectedReadyDate:addDays(startDate,cycle),
-    expectedYieldGramsPerTray:yieldPerTray, minimumYieldGramsPerTray:minPerTray,
-    expectedLossGramsPerTray:lossPerTray, expectedYieldGrams:expected,
-    expectedLossGrams:loss, expectedUsableYieldGrams:Math.max(0,expected-loss),
-    status:"growing",
+    soaking: { date: soakingStart, status: (soakingApplicable ? "not_started" : "na") as GrowingBatchPhaseStatus },
+    darkPeriod: { date: darkStart, status: "not_started" as GrowingBatchPhaseStatus },
+    lightPeriod: { date: lightStart, status: "not_started" as GrowingBatchPhaseStatus },
+    startDate: soakingApplicable ? soakingStart : darkStart,
   };
 }
-export async function createGrowingBatch(data:{
-  batchNumber:string; startDate:string; locationId?:string; locationName?:string; notes?:string;
-  items:Omit<GrowingBatchItem,"id">[]; uid:string; email?:string;
+
+export function buildBatchItem(product: Product, harvestDate: string, trayCount: number): Omit<GrowingBatchItem, "id"> {
+  const trays = Math.max(1, Math.round(trayCount));
+  const cycle = Math.max(1, Math.round(Number(product.growingCycleDays ?? 0)));
+  const yieldPerTray = Math.max(0, Math.round(Number(product.expectedYieldGramsPerTray ?? product.expectedYieldGramsPerBatch ?? 0)));
+  const minPerTray = Math.max(0, Math.round(Number(product.minimumYieldGramsPerTray ?? product.minimumBatchYieldGrams ?? 0)));
+  const lossPerTray = Math.max(0, Math.round(Number(product.expectedLossGramsPerTray ?? 0)));
+  const expected = yieldPerTray * trays;
+  const loss = lossPerTray * trays;
+  const phases = calculateGrowingPhaseDates(product, harvestDate);
+
+  return {
+    productId: product.id,
+    productName: product.name,
+    trayCount: trays,
+    startDate: phases.startDate,
+    growingCycleDays: cycle,
+    expectedReadyDate: harvestDate,
+    expectedYieldGramsPerTray: yieldPerTray,
+    minimumYieldGramsPerTray: minPerTray,
+    expectedLossGramsPerTray: lossPerTray,
+    expectedYieldGrams: expected,
+    expectedLossGrams: loss,
+    expectedUsableYieldGrams: Math.max(0, expected - loss),
+    phases: {
+      soaking: phases.soaking,
+      darkPeriod: phases.darkPeriod,
+      lightPeriod: phases.lightPeriod,
+    },
+    status: "not_started",
+  };
+}
+
+export async function createGrowingBatch(data: {
+  batchNumber: string;
+  harvestDate: string;
+  startDate?: string;
+  locationId?: string;
+  locationName?: string;
+  notes?: string;
+  items: Omit<GrowingBatchItem, "id">[];
+  uid: string;
+  email?: string;
 }) {
-  if(!data.batchNumber.trim()) throw new Error("Batch number is required.");
-  if(!data.items.length) throw new Error("Add at least one product to the batch.");
-  const ref=doc(collection(db,"growingBatches"));
-  const items=data.items.map((item,index)=>({...item,id:`${ref.id}-${index+1}`}));
-  await runTransaction(db,async transaction=>{
-    transaction.set(ref,{
-      batchNumber:data.batchNumber.trim(),startDate:data.startDate,
-      locationId:data.locationId??"",locationName:data.locationName??"",
-      notes:data.notes?.trim()||"",status:"growing" as GrowingBatchStatus,items,
-      createdByUid:data.uid,createdByEmail:data.email??"",createdAt:serverTimestamp(),updatedAt:serverTimestamp()
+  if (!data.batchNumber.trim()) throw new Error("Batch number is required.");
+  if (!data.harvestDate) throw new Error("Harvest date is required.");
+  if (!data.items.length) throw new Error("Add at least one microgreen to the batch.");
+
+  const ref = doc(collection(db, "growingBatches"));
+  const items = data.items.map((item, index) => ({ ...item, id: `${ref.id}-${index + 1}` }));
+  const startDate = data.startDate || items.map(i => i.startDate).sort()[0] || data.harvestDate;
+
+  await runTransaction(db, async transaction => {
+    transaction.set(ref, {
+      batchNumber: data.batchNumber.trim(),
+      startDate,
+      harvestDate: data.harvestDate,
+      locationId: data.locationId ?? "",
+      locationName: data.locationName ?? "",
+      notes: data.notes?.trim() || "",
+      status: "not_started" as GrowingBatchStatus,
+      items,
+      createdByUid: data.uid,
+      createdByEmail: data.email ?? "",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
     });
   });
+
   await auditEvent("create", "growingBatches", ref.id, `Created growing batch ${data.batchNumber.trim()}`);
   return ref.id;
 }
+
+const phaseKeys = ["soaking", "darkPeriod", "lightPeriod"] as const;
+type PhaseKey = typeof phaseKeys[number];
+
+function phaseStatus(item: GrowingBatchItem, key: PhaseKey) {
+  return item.phases?.[key]?.status ?? "not_started";
+}
+
+function firstPendingPhase(item: GrowingBatchItem): PhaseKey | null {
+  for (const key of phaseKeys) {
+    if (phaseStatus(item, key) === "na") continue;
+    if (phaseStatus(item, key) !== "completed") return key;
+  }
+  return null;
+}
+
+export async function advanceGrowingBatchItemPhase(
+  batch: GrowingBatch,
+  itemId: string,
+  uid: string,
+  email?: string,
+) {
+  const batchRef = doc(db, "growingBatches", batch.id);
+
+  await runTransaction(db, async transaction => {
+    const snap = await transaction.get(batchRef);
+    if (!snap.exists()) throw new Error("Growing batch no longer exists.");
+    const latest = snap.data() as GrowingBatch;
+    const item = latest.items.find(x => x.id === itemId);
+    if (!item) throw new Error("Batch microgreen no longer exists.");
+    if (item.status === "completed_harvested") throw new Error("This microgreen has already been harvested.");
+
+    const currentKey = firstPendingPhase(item);
+    if (!currentKey) throw new Error("All growing phases are already complete. Harvest this microgreen.");
+
+    const nextPhases = {
+      soaking: { ...(item.phases?.soaking ?? { status: "not_started" as GrowingBatchPhaseStatus }) },
+      darkPeriod: { ...(item.phases?.darkPeriod ?? { status: "not_started" as GrowingBatchPhaseStatus }) },
+      lightPeriod: { ...(item.phases?.lightPeriod ?? { status: "not_started" as GrowingBatchPhaseStatus }) },
+    };
+
+    nextPhases[currentKey] = { ...nextPhases[currentKey], status: "completed" };
+    const currentIndex = phaseKeys.indexOf(currentKey);
+    for (let i = currentIndex + 1; i < phaseKeys.length; i += 1) {
+      const key = phaseKeys[i];
+      if (nextPhases[key].status === "na") continue;
+      nextPhases[key] = { ...nextPhases[key], status: "in_progress" };
+      break;
+    }
+
+    const updatedItems = latest.items.map(x => x.id === itemId
+      ? { ...x, phases: nextPhases, status: "in_progress" as const }
+      : x
+    );
+
+    transaction.update(batchRef, {
+      items: updatedItems,
+      status: "in_progress" as GrowingBatchStatus,
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  await auditEvent("phase_progress", "growingBatches", batch.id, `Advanced growing phase for batch item ${itemId}`);
+}
+
 export async function harvestGrowingBatchItem(
   batch:GrowingBatch,itemId:string,actualYieldGrams:number,actualReadyDate:string,
   wastageGrams:number,notes:string|undefined,uid:string,email?:string
@@ -57,7 +192,10 @@ export async function harvestGrowingBatchItem(
   const netUsableYieldGrams=actualYieldGrams-wastageGrams;
   const batchItem=batch.items.find(x=>x.id===itemId);
   if(!batchItem) throw new Error("Batch item no longer exists.");
-  if(["harvested","failed"].includes(batchItem.status)) throw new Error("This batch item cannot be harvested.");
+  if (batchItem.status === "completed_harvested" || batchItem.status === "failed") throw new Error("This batch item cannot be harvested.");
+  if (batchItem.phases?.lightPeriod?.status !== "completed") {
+    throw new Error("Complete the Light Period before harvesting.");
+  }
   const productRef=doc(db,"products",batchItem.productId), batchRef=doc(db,"growingBatches",batch.id);
   const adjustmentRef=doc(collection(db,"inventoryAdjustments"));
   await runTransaction(db,async transaction=>{
@@ -66,11 +204,31 @@ export async function harvestGrowingBatchItem(
     if(!batchSnap.exists()) throw new Error("Growing batch no longer exists.");
     const product=productSnap.data() as Product, latest=batchSnap.data() as GrowingBatch;
     const latestItem=latest.items.find(x=>x.id===itemId);
-    if(!latestItem||["harvested","failed"].includes(latestItem.status)) throw new Error("This batch item was already processed.");
+    if (!latestItem || latestItem.status === "completed_harvested" || latestItem.status === "failed") throw new Error("This batch item was already processed.");
+    if (latestItem.phases?.lightPeriod?.status !== "completed") throw new Error("Complete the Light Period before harvesting.");
     const previousStock=Number(product.stockGrams??product.stock??0), newStock=previousStock+netUsableYieldGrams;
-    const updatedItems=latest.items.map(x=>x.id===itemId?{...x,actualReadyDate,actualHarvestGrams:actualYieldGrams,actualYieldGrams:netUsableYieldGrams,wastageGrams,notes:notes?.trim()||x.notes||"",status:"harvested" as const}:x);
-    const statuses=updatedItems.map(x=>x.status);
-    const batchStatus:GrowingBatchStatus=statuses.every(x=>x==="harvested"||x==="failed")?"completed":statuses.some(x=>x==="harvested")?"partially_harvested":latest.status;
+    const updatedItems = latest.items.map(x => x.id === itemId
+      ? {
+          ...x,
+          actualReadyDate,
+          actualHarvestGrams: actualYieldGrams,
+          actualYieldGrams: netUsableYieldGrams,
+          wastageGrams,
+          notes: notes?.trim() || x.notes || "",
+          status: "completed_harvested" as const,
+          phases: x.phases
+            ? { ...x.phases, lightPeriod: { ...x.phases.lightPeriod, status: "completed" as const } }
+            : x.phases,
+        }
+      : x
+    );
+    const allHarvested = updatedItems.every(x => x.status === "completed_harvested" || x.status === "failed");
+    const anyStarted = updatedItems.some(x => x.status === "in_progress" || x.status === "completed_harvested");
+    const batchStatus: GrowingBatchStatus = allHarvested
+      ? "completed_harvested"
+      : anyStarted
+        ? "in_progress"
+        : "not_started";
     transaction.update(productRef,{stockGrams:newStock,stock:newStock,status:product.status==="out_of_stock"&&newStock>0?"active":product.status,updatedAt:serverTimestamp()});
     transaction.update(batchRef,{items:updatedItems,status:batchStatus,updatedAt:serverTimestamp()});
     transaction.set(adjustmentRef,{productId:batchItem.productId,productName:batchItem.productName,type:"harvest",quantity:netUsableYieldGrams,unit:"g",previousStock,newStock,actualHarvestGrams:actualYieldGrams,wastageGrams,reason:`Harvested ${latest.batchNumber}`,growingBatchId:batch.id,growingBatchItemId:itemId,createdByUid:uid,createdByEmail:email??"",createdAt:serverTimestamp()});
@@ -95,7 +253,7 @@ export async function adjustGrowingBatchStock(
   if (batch.stockAdjusted) throw new Error("This batch has already been adjusted in batch-wise stock.");
   if (batch.delivered) throw new Error("This batch has already been marked as delivered.");
 
-  const selectedItems = (batch.items ?? []).filter(item => item.status === "harvested" || item.status === "failed");
+  const selectedItems = (batch.items ?? []).filter(item => item.status === "completed_harvested" || item.status === "failed");
   if (!selectedItems.length) throw new Error("This batch has no harvested items to add to batch-wise stock.");
 
   for (const item of selectedItems) {
@@ -205,6 +363,7 @@ export async function markGrowingBatchDelivered(
     if (latest.delivered) throw new Error("This batch is already marked as delivered.");
     transaction.update(batchRef, {
       delivered: true,
+      status: "closed" as GrowingBatchStatus,
       deliveredAt: serverTimestamp(),
       deliveredByUid: uid,
       deliveredByEmail: email ?? "",

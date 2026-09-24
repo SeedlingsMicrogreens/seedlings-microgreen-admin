@@ -19,7 +19,7 @@ export default function NotificationsPage(){
  const alerts=useMemo(()=>{const a:{type:string;title:string;message:string;severity:"warning"|"info"|"danger"}[]=[];const today=new Date().toISOString().slice(0,10);
   products.filter(p=>p.status!=="inactive"&&Number(p.stockGrams??p.stock??0)<=Number(p.lowStockThresholdGrams??p.lowStockThreshold??0)).forEach(p=>a.push({type:"low_stock",title:"Low stock",message:`${p.name} has ${(Number(p.stockGrams??p.stock??0)).toLocaleString()} gms available.`,severity:"warning"}));
   subs.filter(s=>s.status==="active"&&s.nextDeliveryDate&&daysUntil(s.nextDeliveryDate)!==null&&daysUntil(s.nextDeliveryDate)!==undefined&&daysUntil(s.nextDeliveryDate)!<=3&&daysUntil(s.nextDeliveryDate)!>=0).forEach(s=>a.push({type:"subscription_due",title:"Subscription due soon",message:`${s.subscriptionNumber} — ${s.customerName||"Customer"} — ${s.nextDeliveryDate}.`,severity:"info"}));
-  batches.forEach(b=>b.items.forEach(i=>{if(i.status!=="harvested"&&i.status!=="failed"&&i.expectedReadyDate&&i.expectedReadyDate<=today)a.push({type:"harvest_due",title:"Harvest due",message:`${b.batchNumber} — ${i.productName} is due for harvest.`,severity:"warning"})}));
+  batches.forEach(b=>b.items.forEach(i=>{if(i.status!=="completed_harvested"&&i.status!=="failed"&&i.expectedReadyDate&&i.expectedReadyDate<=today)a.push({type:"harvest_due",title:"Harvest due",message:`${b.batchNumber} — ${i.productName} is due for harvest.`,severity:"warning"})}));
   orders.filter(o=>o.status==="pending_payment").forEach(o=>a.push({type:"order_status",title:"Order awaiting payment",message:`${o.orderNumber||o.id} — ${o.customerName||"Customer"}.`,severity:"info"}));
   return a;
  },[products,subs,batches,orders]);

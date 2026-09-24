@@ -5,8 +5,27 @@ import { deleteField } from "firebase/firestore";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { createRecord, listCollection, updateRecord } from "@/lib/firestore";
 import { deleteOrDeactivateProduct } from "@/lib/productService";
-import type { Product, ProductStatus } from "@/types/catalog";
+import type { GrowingPhase, Product, ProductStatus } from "@/types/catalog";
 import {confirmAction} from "@/lib/alerts";
+
+const FIXED_GROWING_PHASES: GrowingPhase[] = [
+  { phase: "Soaking", noOfDays: 1 },
+  { phase: "Dark Period", noOfDays: 3 },
+  { phase: "Light Period", noOfDays: 4 },
+];
+const DEFAULT_GROWING_CYCLE_DAYS = FIXED_GROWING_PHASES.reduce((sum, item) => sum + item.noOfDays, 0);
+
+function normalizeGrowingPhases(phases?: GrowingPhase[]) {
+  return FIXED_GROWING_PHASES.map((fixedPhase) => {
+    const existing = phases?.find((phase) => phase.phase === fixedPhase.phase);
+    const days = Number(existing?.noOfDays ?? fixedPhase.noOfDays);
+    return { phase: fixedPhase.phase, noOfDays: Math.min(5, Math.max(0, Number.isFinite(days) ? days : fixedPhase.noOfDays)) };
+  });
+}
+
+function growingCycleDays(phases: GrowingPhase[]) {
+  return phases.reduce((sum, phase) => sum + Number(phase.noOfDays || 0), 0);
+}
 
 const emptyProduct: Omit<Product, "id"> = {
   name: "",
@@ -20,7 +39,9 @@ const emptyProduct: Omit<Product, "id"> = {
   stockGrams: 0,
   lowStockThresholdGrams: 500,
   growingActive: true,
-  growingCycleDays: 7,
+  growingPhases: normalizeGrowingPhases(),
+  soakingRequired: true,
+  growingCycleDays: DEFAULT_GROWING_CYCLE_DAYS,
   expectedYieldGramsPerTray: 200,
   minimumYieldGramsPerTray: 150,
   expectedLossGramsPerTray: 20,
@@ -68,7 +89,8 @@ export default function ProductsPage() {
   async function load() {
     setLoading(true);
     try {
-      setProducts(await listCollection<Product>("products"));
+      const productRows = await listCollection<Product>("products");
+      setProducts(productRows);
       setError("");
     } catch {
       setError("Unable to load products. Check Firestore rules/indexes.");
@@ -112,7 +134,9 @@ export default function ProductsPage() {
       stockGrams: stockValue(product),
       lowStockThresholdGrams: thresholdValue(product),
       growingActive: product.growingActive !== false,
-      growingCycleDays: Number(product.growingCycleDays ?? 0),
+      growingPhases: normalizeGrowingPhases(product.growingPhases),
+      soakingRequired: product.soakingRequired !== false,
+      growingCycleDays: growingCycleDays(normalizeGrowingPhases(product.growingPhases)),
       expectedYieldGramsPerTray: Number(product.expectedYieldGramsPerTray ?? product.expectedYieldGramsPerBatch ?? 0),
       minimumYieldGramsPerTray: Number(product.minimumYieldGramsPerTray ?? product.minimumBatchYieldGrams ?? 0),
       expectedLossGramsPerTray: Number(product.expectedLossGramsPerTray ?? 0),
@@ -129,11 +153,13 @@ export default function ProductsPage() {
     setTab("list");
   }
 
+
   async function save(event: React.FormEvent) {
     event.preventDefault();
     setError("");
 
-    const cycle = Number(form.growingCycleDays);
+    const phases = normalizeGrowingPhases(form.growingPhases);
+    const cycle = growingCycleDays(phases);
     const expected = Number(form.expectedYieldGramsPerTray);
     const minimum = Number(form.minimumYieldGramsPerTray);
     const loss = Number(form.expectedLossGramsPerTray);
@@ -142,6 +168,7 @@ export default function ProductsPage() {
 
     if (!form.name.trim()) return setError("Product name is required.");
     if (!form.sku?.trim()) return setError("SKU / product code is required.");
+    if (phases.some((phase) => !Number.isInteger(Number(phase.noOfDays)) || Number(phase.noOfDays) < 0 || Number(phase.noOfDays) > 5)) return setError("Each growing phase must be between 0 and 5 days.");
     if (!Number.isInteger(cycle) || cycle <= 0) return setError("Growing cycle must be at least 1 whole day.");
     if (!Number.isInteger(expected) || expected <= 0) return setError("Expected yield per tray must be greater than 0.");
     if (!Number.isInteger(minimum) || minimum < 0) return setError("Minimum yield per tray cannot be negative.");
@@ -170,6 +197,8 @@ export default function ProductsPage() {
       lowStockThresholdGrams: threshold,
 
       growingActive: form.growingActive !== false,
+      growingPhases: phases,
+      soakingRequired: form.soakingRequired !== false,
       growingCycleDays: cycle,
       expectedYieldGramsPerTray: expected,
       minimumYieldGramsPerTray: minimum,
@@ -180,7 +209,7 @@ export default function ProductsPage() {
     setSaving(true);
     try {
       if (editing) {
-        await updateRecord("products", editing, { ...normalized, description: deleteField(), shortDescription: deleteField(), imageUrls: deleteField() });
+        await updateRecord("products", editing, { ...normalized, sellingOptions: deleteField(), description: deleteField(), shortDescription: deleteField(), imageUrls: deleteField() });
       } else {
         await createRecord("products", normalized);
       }
@@ -347,15 +376,11 @@ export default function ProductsPage() {
                       </div>
                     </div>
                   </div>
-
                   <div className="col-lg-5">
                     <div className="card border">
                       <div className="card-header"><strong>Production Configuration</strong></div>
                       <div className="card-body">
                         <p className="small text-muted">These values drive Growing Batches and future forecasting. Expected values never become current inventory.</p>
-
-                        <label className="form-label">Growing cycle (days) *</label>
-                        <input className="form-control mb-3" type="number" min="1" step="1" value={form.growingCycleDays} onChange={(e) => setForm({ ...form, growingCycleDays: Number(e.target.value) })} />
 
                         <label className="form-label">Expected usable yield / tray (gms) *</label>
                         <input className="form-control mb-3" type="number" min="1" step="1" value={form.expectedYieldGramsPerTray} onChange={(e) => setForm({ ...form, expectedYieldGramsPerTray: Number(e.target.value) })} />
@@ -376,6 +401,53 @@ export default function ProductsPage() {
                       </div>
                     </div>
 
+
+                  </div>
+
+                  <div className="col-lg-7">
+                    <div className="card border">
+                      <div className="card-header"><strong>Growing Phases</strong></div>
+                      <div className="card-body">
+                        <div className="row g-3">
+                          {FIXED_GROWING_PHASES.map((phase) => {
+                            const current = form.growingPhases?.find((item) => item.phase === phase.phase)?.noOfDays ?? phase.noOfDays;
+                            return (
+                              <div className="col-md-4" key={phase.phase}>
+                                <label className="form-label">{phase.phase} (days) *</label>
+                                <input
+                                  className="form-control"
+                                  type="number"
+                                  min="0"
+                                  max="5"
+                                  step="1"
+                                  value={current}
+                                  onChange={(e) => {
+                                    const value = Math.min(5, Math.max(0, Number(e.target.value) || 0));
+                                    const next = normalizeGrowingPhases(form.growingPhases).map((item) => item.phase === phase.phase ? { ...item, noOfDays: value } : item);
+                                    setForm({ ...form, growingPhases: next, growingCycleDays: growingCycleDays(next) });
+                                  }}
+                                  required
+                                />
+                                <div className="form-text">Maximum 5 days.</div>
+                              </div>
+                            );
+                          })}
+                          <div className="col-md-4">
+                            <label className="form-label">Growing cycle (days)</label>
+                            <input className="form-control" type="number" value={growingCycleDays(normalizeGrowingPhases(form.growingPhases))} readOnly />
+                            <div className="form-text">Automatically calculated from the three phases.</div>
+                          </div>
+                          <div className="col-md-4 d-flex align-items-end">
+                            <div className="form-check mb-2">
+                              <input className="form-check-input" id="soaking-required" type="checkbox" checked={form.soakingRequired !== false} onChange={(e) => setForm({ ...form, soakingRequired: e.target.checked })} />
+                              <label className="form-check-label" htmlFor="soaking-required">Soaking required?</label>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="col-lg-5">
                     <div className="card border mt-4">
                       <div className="card-header"><strong>Current Inventory</strong></div>
                       <div className="card-body">
@@ -389,6 +461,10 @@ export default function ProductsPage() {
                       </div>
                     </div>
 
+
+                  </div>
+
+                  <div className="col-12">
                     <div className="card border mt-4">
                       <div className="card-header"><strong>Status</strong></div>
                       <div className="card-body">

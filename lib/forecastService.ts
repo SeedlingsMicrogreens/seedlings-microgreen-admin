@@ -106,9 +106,9 @@ export function buildForecast(
       const currentRequirement = Math.max(0, Math.round(openOrderRequirement + subscriptionRequirement));
 
       const inProduction = batches.reduce((sum, batch) => {
-        if (batch.status === "completed") return sum;
+        if (batch.status === "completed_harvested" || batch.status === "closed") return sum;
         return sum + (batch.items ?? [])
-          .filter(item => item.productId === product.id && !["harvested", "failed"].includes(item.status))
+          .filter(item => item.productId === product.id && !["completed_harvested", "failed"].includes(item.status))
           .reduce((total, item) => total + Math.max(0, Number(item.expectedUsableYieldGrams ?? 0)), 0);
       }, 0);
 

@@ -243,7 +243,7 @@ export default function FulfilmentPage() {
 
     for (const batch of batches) {
       for (const item of batch.items ?? []) {
-        if (item.status !== "harvested") continue;
+        if (item.status !== "completed_harvested") continue;
         const usable = numberValue(item.actualYieldGrams);
         actualProduced.set(item.productId, (actualProduced.get(item.productId) ?? 0) + usable);
       }

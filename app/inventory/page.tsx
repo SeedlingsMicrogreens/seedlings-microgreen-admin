@@ -41,16 +41,16 @@ export default function InventoryPage() {
   const eligibleBatches = batches.filter(batch =>
     !batch.stockAdjusted &&
     !batch.delivered &&
-    (batch.items ?? []).some(item => item.status === "harvested" || item.status === "failed")
+    (batch.items ?? []).some(item => item.status === "completed_harvested" || item.status === "failed")
   );
   const selectedBatch = eligibleBatches.find(batch => batch.id === selectedBatchId) ?? null;
-  const selectedBatchItems = (selectedBatch?.items ?? []).filter(item => item.status === "harvested" || item.status === "failed");
+  const selectedBatchItems = (selectedBatch?.items ?? []).filter(item => item.status === "completed_harvested" || item.status === "failed");
   function selectBatch(id: string) {
     setSelectedBatchId(id);
     const batch = eligibleBatches.find(item => item.id === id);
     if (!batch) { setBatchQuantities({}); return; }
     setBatchQuantities(Object.fromEntries((batch.items ?? [])
-      .filter(item => item.status === "harvested" || item.status === "failed")
+      .filter(item => item.status === "completed_harvested" || item.status === "failed")
       .map(item => [item.id, Number(item.actualYieldGrams ?? 0)])));
   }
   async function saveBatchStock() {

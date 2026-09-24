@@ -54,8 +54,8 @@ export function metricForItem(item: GrowingBatchItem) {
     harvested,
     usable,
     loss,
-    variance: item.status === "harvested" ? usable - expectedUsable : 0,
-    achievement: expectedUsable > 0 && item.status === "harvested" ? (usable / expectedUsable) * 100 : null,
+    variance: item.status === "completed_harvested" ? usable - expectedUsable : 0,
+    achievement: expectedUsable > 0 && item.status === "completed_harvested" ? (usable / expectedUsable) * 100 : null,
   };
 }
 
@@ -92,7 +92,7 @@ export function buildProductionMetrics(
       current.actualLossGrams += m.loss;
       current.yieldVarianceGrams += m.variance;
       current.minimumExpectedGrams += m.minimum;
-      if (item.status === "harvested") current.completedBatches += 1;
+      if (item.status === "completed_harvested") current.completedBatches += 1;
       rows.set(item.productId, current);
     }
   }
@@ -118,7 +118,7 @@ export function buildBatchMetrics(batches: GrowingBatch[], startDate?: string, e
     const actualHarvested = metrics.reduce((s,m) => s+m.harvested,0);
     const actualLoss = metrics.reduce((s,m) => s+m.loss,0);
     const trays = batch.items.reduce((s,i)=>s+n(i.trayCount),0);
-    const harvestedItems = batch.items.filter(i=>i.status==="harvested").length;
+    const harvestedItems = batch.items.filter(i=>i.status==="completed_harvested").length;
     return {
       batchId: batch.id, batchNumber: batch.batchNumber, startDate: batch.startDate,
       locationName: batch.locationName, status: batch.status, productCount: batch.items.length,

@@ -8,6 +8,7 @@ export type SubscriptionPlan = {
   name: string;
   frequency: SubscriptionFrequency;
   deliveriesPerTerm: number;
+  skipsAllowed: number;
   price: number;
   deliveryChargeMode: "included" | "per_delivery" | "free";
   deliveryCharge: number;

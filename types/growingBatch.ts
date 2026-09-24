@@ -1,19 +1,28 @@
 export const GROWING_BATCH_STATUSES = [
-  "planned", "growing", "partially_harvested", "completed",
+  "not_started", "in_progress", "completed_harvested", "closed",
 ] as const;
 export type GrowingBatchStatus = (typeof GROWING_BATCH_STATUSES)[number];
 
 export const GROWING_BATCH_ITEM_STATUSES = [
-  "growing", "ready", "harvested", "failed",
+  "not_started", "in_progress", "completed_harvested", "failed",
 ] as const;
 export type GrowingBatchItemStatus = (typeof GROWING_BATCH_ITEM_STATUSES)[number];
+
+export const GROWING_BATCH_PHASE_STATUSES = [
+  "na", "not_started", "in_progress", "completed",
+] as const;
+export type GrowingBatchPhaseStatus = (typeof GROWING_BATCH_PHASE_STATUSES)[number];
+
+export type GrowingBatchPhase = {
+  status: GrowingBatchPhaseStatus;
+  date?: string;
+};
 
 export type GrowingBatchItem = {
   id: string;
   productId: string;
   productName: string;
 
-  /** Number of trays planted for this product in this batch. */
   trayCount: number;
   startDate: string;
   growingCycleDays: number;
@@ -27,24 +36,30 @@ export type GrowingBatchItem = {
   expectedLossGrams: number;
   expectedUsableYieldGrams: number;
 
+  /** Planned phase dates calculated backwards from the batch harvest date. */
+  phases?: {
+    soaking: GrowingBatchPhase;
+    darkPeriod: GrowingBatchPhase;
+    lightPeriod: GrowingBatchPhase;
+  };
+
   actualReadyDate?: string;
-  /** Gross grams harvested before actual loss/wastage. */
   actualHarvestGrams?: number;
-  /** Net usable grams added to product inventory after actual loss. */
   actualYieldGrams?: number;
-  /** Actual grams lost/wasted during harvest/cleaning. */
   wastageGrams?: number;
 
   status: GrowingBatchItemStatus;
   notes?: string;
-  /** Batch-wise inventory quantity recorded after harvest reconciliation. */
   batchStockGrams?: number;
 };
 
 export type GrowingBatch = {
   id: string;
   batchNumber: string;
+  /** Earliest planned phase date. Kept for backward compatibility. */
   startDate: string;
+  /** Harvest date selected while creating the batch. */
+  harvestDate?: string;
   locationId?: string;
   locationName?: string;
   notes?: string;
@@ -54,12 +69,10 @@ export type GrowingBatch = {
   createdByEmail?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
-  /** True after the batch has been reconciled on Inventory → Batch-wise Stock. */
   stockAdjusted?: boolean;
   stockAdjustedAt?: unknown;
   stockAdjustedByUid?: string;
   stockAdjustedByEmail?: string;
-  /** True when this batch has been fully delivered/closed operationally. */
   delivered?: boolean;
   deliveredAt?: unknown;
   deliveredByUid?: string;

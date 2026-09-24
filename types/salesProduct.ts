@@ -1,5 +1,13 @@
 export type SalesProductType = "single" | "multiple";
 
+export type SalesProductSellingOption = {
+  id: string;
+  weightGrams: number;
+  mrp: number;
+  price: number;
+  active: boolean;
+};
+
 export type SalesProductComponent = {
   productId: string;
   productName: string;
@@ -23,6 +31,7 @@ export type SalesProduct = {
   mrp: number;
   /** Actual customer-facing sale price. */
   sellingPrice: number;
+  sellingOptions?: SalesProductSellingOption[];
   /** Current packed saleable units available for fulfilment/orders. */
   packedStockQuantity?: number;
   currency: string;

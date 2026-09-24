@@ -7,14 +7,16 @@ import { RichTextEditor } from "@/components/ui/RichTextEditor";
 import { createSalesProduct, deleteOrDeactivateSalesProduct, listSalesProducts, updateSalesProduct, validateSalesProduct } from "@/lib/salesProductService";
 import { listCollection } from "@/lib/firestore";
 import type { Product } from "@/types/catalog";
-import type { SalesProduct, SalesProductComponent, SalesProductType } from "@/types/salesProduct";
+import type { Packaging } from "@/types/packaging";
+import { packagingDisplay } from "@/types/packaging";
+import type { SalesProduct, SalesProductComponent, SalesProductSellingOption, SalesProductType } from "@/types/salesProduct";
 import {confirmAction} from "@/lib/alerts";
 
 const empty = {
   name: "", sku: "", slug: "", description: "", shortDescription: "", imageUrl: "",
   type: "single" as SalesProductType,
   components: [] as SalesProductComponent[], mrp: 0, sellingPrice: 0,
-  oneTimePurchase: true, subscriptionPurchase: false, active: true, featured: false, sortOrder: 0
+  oneTimePurchase: true, subscriptionPurchase: false, active: true, featured: false, sortOrder: 0, sellingOptions: [] as SalesProductSellingOption[]
 };
 
 function slugify(v: string) { return v.toLowerCase().trim().replace(/[^a-z_-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, ""); }
@@ -26,6 +28,7 @@ function typeLabel(v: SalesProductType) { return v === "single" ? "Single" : "Co
 export default function SalesProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [salableProducts, setSalableProducts] = useState<SalesProduct[]>([]);
+  const [packaging, setPackaging] = useState<Packaging[]>([]);
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState<string | null>(null);
   const [tab, setTab] = useState<"list" | "form">("list");
@@ -40,11 +43,12 @@ export default function SalesProductsPage() {
   async function load() {
     setLoading(true);
     try {
-      const [productionProducts, salable] = await Promise.all([
-        listCollection<Product>("products"), listSalesProducts()
+      const [productionProducts, salable, packagingRows] = await Promise.all([
+        listCollection<Product>("products"), listSalesProducts(), listCollection<Packaging>("packagingMaster", "size")
       ]);
       setProducts(productionProducts);
       setSalableProducts(salable);
+      setPackaging(packagingRows.filter(item => item.active !== false).sort((a, b) => Number(a.size) - Number(b.size)));
       setError("");
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to load products."); }
     finally { setLoading(false); }
@@ -68,7 +72,8 @@ export default function SalesProductsPage() {
         ? (() => { const components = item.components ?? []; const totalGrams = components.reduce((sum, c) => sum + Number(c.quantityGrams ?? 0), 0); if (components.some(c => c.percentage != null)) return components.map(c => ({ ...c, percentage: Number(c.percentage ?? 0) })); const percentages = components.map(c => totalGrams > 0 ? Math.round((Number(c.quantityGrams ?? 0) / totalGrams) * 100) : 0); if (percentages.length) percentages[percentages.length - 1] += 100 - percentages.reduce((sum, value) => sum + value, 0); return components.map((c, i) => ({ ...c, percentage: percentages[i] })); })()
         : (item.components ?? []), mrp: Number(item.mrp ?? item.sellingPrice ?? 0), sellingPrice: Number(item.sellingPrice ?? 0),
       oneTimePurchase: item.oneTimePurchase !== false, subscriptionPurchase: Boolean(item.subscriptionPurchase),
-      active: item.active !== false, featured: Boolean(item.featured), sortOrder: Number(item.sortOrder ?? 0)
+      active: item.active !== false, featured: Boolean(item.featured), sortOrder: Number(item.sortOrder ?? 0),
+      sellingOptions: (item.sellingOptions ?? []).map(option => ({ ...option, id: option.id || crypto.randomUUID(), weightGrams: Number(option.weightGrams ?? 0), mrp: Number(option.mrp ?? option.price ?? 0), price: Number(option.price ?? 0), active: option.active !== false }))
     });
     setNameTouched(true); setSkuTouched(true); setSlugTouched(true); setError(""); setTab("form");
   }
@@ -117,6 +122,20 @@ export default function SalesProductsPage() {
   }
   function removeComponent(index: number) { setForm(f => ({ ...f, components: f.components.filter((_, i) => i !== index) })); }
 
+  function addSellingOption() {
+    const used = new Set((form.sellingOptions ?? []).map(option => Number(option.weightGrams)));
+    const firstPackaging = packaging.find(item => !used.has(Number(item.size)));
+    if (!firstPackaging) return setError("All available packaging sizes are already added.");
+    setError("");
+    setForm(f => ({ ...f, sellingOptions: [...(f.sellingOptions ?? []), { id: crypto.randomUUID(), weightGrams: Number(firstPackaging.size), mrp: 0, price: 0, active: true }] }));
+  }
+  function updateSellingOption(index: number, patch: Partial<SalesProductSellingOption>) {
+    setForm(f => ({ ...f, sellingOptions: (f.sellingOptions ?? []).map((option, i) => i === index ? { ...option, ...patch } : option) }));
+  }
+  function removeSellingOption(index: number) {
+    setForm(f => ({ ...f, sellingOptions: (f.sellingOptions ?? []).filter((_, i) => i !== index) }));
+  }
+
   function changeName(name: string) {
     setNameTouched(true);
     setForm(f => ({
@@ -135,6 +154,11 @@ export default function SalesProductsPage() {
         ? { ...c, productName: p?.name ?? c.productName, productSku: p?.sku ?? c.productSku, percentage: Number(c.percentage ?? 0), quantityGrams: 0 }
         : { ...c, productName: p?.name ?? c.productName, productSku: p?.sku ?? c.productSku, quantityGrams: Number(c.quantityGrams) };
     });
+    const sellingOptions = (form.sellingOptions ?? []).map(option => ({ ...option, weightGrams: Number(option.weightGrams), mrp: Number(option.mrp), price: Number(option.price), active: option.active !== false }));
+    if (sellingOptions.some(option => !option.weightGrams || option.weightGrams <= 0)) return setError("Select a packaging size for every salable option.");
+    if (sellingOptions.some(option => option.mrp <= 0 || option.price <= 0)) return setError("MRP and selling price must be greater than 0 for every salable option.");
+    if (sellingOptions.some(option => option.price > option.mrp)) return setError("Selling price cannot be greater than MRP.");
+    if (new Set(sellingOptions.map(option => option.weightGrams)).size !== sellingOptions.length) return setError("Each packaging size can be added only once.");
     try {
       validateSalesProduct({ ...form, imageUrl: form.imageUrl, components, mrp: Number(form.mrp), sellingPrice: Number(form.sellingPrice) });
       const sku = form.sku.trim();
@@ -145,7 +169,7 @@ export default function SalesProductsPage() {
         description: form.description.trim() || undefined, shortDescription: form.shortDescription.trim() || undefined,
         imageUrl: form.imageUrl.trim(), type: form.type, components,
         mrp: Number(form.mrp), sellingPrice: Number(form.sellingPrice), currency: "INR", oneTimePurchase: form.oneTimePurchase,
-        subscriptionPurchase: form.subscriptionPurchase, active: form.active, featured: form.featured, sortOrder: Number(form.sortOrder)
+        subscriptionPurchase: form.subscriptionPurchase, active: form.active, featured: form.featured, sortOrder: Number(form.sortOrder), sellingOptions
       };
       setSaving(true);
       if (editing) await updateSalesProduct(editing, data); else await createSalesProduct(data);
@@ -204,6 +228,7 @@ export default function SalesProductsPage() {
           <div className="row g-3"><div className="col-md-6"><label className="form-label">Product Name *</label><input className="form-control" value={form.name} onChange={e => changeName(e.target.value)} required placeholder="e.g. Broccoli 200gms" /></div><div className="col-md-6"><label className="form-label">SKU / Code</label><input className="form-control" value={form.sku} onChange={e => { setSkuTouched(true); setForm({...form,sku:e.target.value}); }} placeholder="e.g. SP-BRO-200" /></div><div className="col-md-6"><label className="form-label">Slug</label><input className="form-control" value={form.slug} onChange={e => { setSlugTouched(true); setForm({...form,slug:sanitizeSlug(e.target.value)}); }} placeholder="e.g. broccoli-microgreens" inputMode="text" autoCapitalize="none" spellCheck={false} /><div className="form-text">Lowercase letters, hyphen (-) and underscore (_) only. Spaces and other characters are not allowed.</div></div><div className="col-12"><label className="form-label">Short Description</label><RichTextEditor value={form.shortDescription} onChange={(html) => setForm({...form, shortDescription: html})} placeholder="Short product description..." minHeight={100} /></div><div className="col-12"><label className="form-label">Description</label><RichTextEditor value={form.description} onChange={(html) => setForm({...form, description: html})} placeholder="Detailed product description..." minHeight={180} /></div></div>
         </div></div>
         <div className="card border mt-4"><div className="card-header"><strong>Product Image *</strong></div><div className="card-body"><ImageGalleryUploader value={form.imageUrl ? [form.imageUrl] : []} onChange={urls => setForm({...form,imageUrl:urls[0] ?? ""})} validation={{ exactWidth: 1200, exactHeight: 1200, maxBytes: 1024 * 1024, allowedTypes: ["image/png", "image/jpeg"] }} guidance={<><strong>Required image.</strong> <span className="text-danger">A Product cannot be saved without a product image.</span><br/><strong>Image Requirements:</strong> 1200 × 1200 px (1:1) square image, PNG/JPG/JPEG. Ideal file size: 150–400 KB. Up to ~700 KB is recommended; images above 1 MB are not accepted.</>} /></div></div>
-      </div><div className="col-lg-5"><div className="card border"><div className="card-header"><strong>Price & Purchase</strong></div><div className="card-body"><div className="row g-3 mb-2"><div className="col-sm-6"><label className="form-label">MRP (₹) *</label><input className="form-control" type="number" min="0.01" step="0.01" value={form.mrp} onChange={e=>setForm({...form,mrp:Number(e.target.value)})}/><div className="form-text">Original/reference price shown to customers.</div></div><div className="col-sm-6"><label className="form-label">Selling Price (₹) *</label><input className="form-control" type="number" min="0.01" step="0.01" value={form.sellingPrice} onChange={e=>setForm({...form,sellingPrice:Number(e.target.value)})}/><div className="form-text">Actual price the customer pays.</div></div></div>{Number(form.mrp) > Number(form.sellingPrice) && Number(form.sellingPrice) > 0 && <div className="alert alert-success py-2 mb-3"><strong>Customer saving:</strong> ₹{(Number(form.mrp) - Number(form.sellingPrice)).toLocaleString("en-IN")}</div>}{form.type === "single" && form.components[0] && <div className="form-text mb-3">Default MRP and selling price are fetched from <strong>{form.components[0].productName}</strong>. You can change them for this Product.</div>}{form.type === "multiple" && <div className="form-text mb-3">Set the selling price for this combo.</div>}<div className="form-check mb-2"><input className="form-check-input" type="checkbox" id="one-time" checked={form.oneTimePurchase} onChange={e=>setForm({...form,oneTimePurchase:e.target.checked})}/><label className="form-check-label" htmlFor="one-time">Available for one-time purchase</label></div><div className="form-check"><input className="form-check-input" type="checkbox" id="subscription" checked={form.subscriptionPurchase} onChange={e=>setForm({...form,subscriptionPurchase:e.target.checked})}/><label className="form-check-label" htmlFor="subscription">Available for subscription</label></div></div></div><div className="card border mt-4"><div className="card-header"><strong>Status</strong></div><div className="card-body"><div className="form-check mb-2"><input className="form-check-input" type="checkbox" id="active" checked={form.active} onChange={e=>setForm({...form,active:e.target.checked})}/><label className="form-check-label" htmlFor="active">Active and available</label></div><div className="form-check mb-3"><input className="form-check-input" type="checkbox" id="featured" checked={form.featured} onChange={e=>setForm({...form,featured:e.target.checked})}/><label className="form-check-label" htmlFor="featured">Featured</label></div><label className="form-label">Sort order</label><input className="form-control" type="number" step="1" value={form.sortOrder} onChange={e=>setForm({...form,sortOrder:Number(e.target.value)})}/></div></div></div></div></div><div className="card-footer d-flex justify-content-end gap-2"><button type="button" className="btn btn-secondary" onClick={reset}>Cancel</button><button className="btn btn-success" disabled={saving || loading}>{saving ? "Saving..." : editing ? "Update Product" : "Create Product"}</button></div></div></form>}
+      </div><div className="col-lg-5"><div className="card border"><div className="card-header"><strong>Price & Purchase</strong></div><div className="card-body"><div className="row g-3 mb-2"><div className="col-sm-6"><label className="form-label">MRP (₹) *</label><input className="form-control" type="number" min="0.01" step="0.01" value={form.mrp} onChange={e=>setForm({...form,mrp:Number(e.target.value)})}/><div className="form-text">Original/reference price shown to customers.</div></div><div className="col-sm-6"><label className="form-label">Selling Price (₹) *</label><input className="form-control" type="number" min="0.01" step="0.01" value={form.sellingPrice} onChange={e=>setForm({...form,sellingPrice:Number(e.target.value)})}/><div className="form-text">Actual price the customer pays.</div></div></div>{Number(form.mrp) > Number(form.sellingPrice) && Number(form.sellingPrice) > 0 && <div className="alert alert-success py-2 mb-3"><strong>Customer saving:</strong> ₹{(Number(form.mrp) - Number(form.sellingPrice)).toLocaleString("en-IN")}</div>}{form.type === "single" && form.components[0] && <div className="form-text mb-3">Default MRP and selling price are fetched from <strong>{form.components[0].productName}</strong>. You can change them for this Product.</div>}{form.type === "multiple" && <div className="form-text mb-3">Set the selling price for this combo.</div>}<div className="form-check mb-2"><input className="form-check-input" type="checkbox" id="one-time" checked={form.oneTimePurchase} onChange={e=>setForm({...form,oneTimePurchase:e.target.checked})}/><label className="form-check-label" htmlFor="one-time">Available for one-time purchase</label></div><div className="form-check"><input className="form-check-input" type="checkbox" id="subscription" checked={form.subscriptionPurchase} onChange={e=>setForm({...form,subscriptionPurchase:e.target.checked})}/><label className="form-check-label" htmlFor="subscription">Available for subscription</label></div></div></div><div className="card border mt-4"><div className="card-header"><strong>Status</strong></div><div className="card-body"><div className="form-check mb-2"><input className="form-check-input" type="checkbox" id="active" checked={form.active} onChange={e=>setForm({...form,active:e.target.checked})}/><label className="form-check-label" htmlFor="active">Active and available</label></div><div className="form-check mb-3"><input className="form-check-input" type="checkbox" id="featured" checked={form.featured} onChange={e=>setForm({...form,featured:e.target.checked})}/><label className="form-check-label" htmlFor="featured">Featured</label></div><label className="form-label">Sort order</label><input className="form-control" type="number" step="1" value={form.sortOrder} onChange={e=>setForm({...form,sortOrder:Number(e.target.value)})}/></div></div></div><div className="col-12"><div className="card border mt-4"><div className="card-header d-flex justify-content-between align-items-center"><strong>Salable Options</strong><button type="button" className="btn btn-sm btn-outline-success" onClick={addSellingOption}><i className="bi bi-plus-lg me-1" />Add More</button></div><div className="card-body"><div className="small text-muted mb-3">Add one or more packaging options with their MRP and selling price.</div>{!form.sellingOptions?.length && <div className="border rounded p-3 text-center text-muted">No salable options added. Click <strong>Add More</strong> to add one.</div>}{form.sellingOptions?.map((option, index) => <div className="row g-3 align-items-end mb-3" key={option.id || index}><div className="col-md-4"><label className="form-label">Packing *</label><select className="form-select" value={Number(option.weightGrams) || ""} onChange={e => updateSellingOption(index, { weightGrams: Number(e.target.value) })} required><option value="">Select packing</option>{packaging.map(item => <option key={item.id} value={item.size} disabled={form.sellingOptions?.some((other, otherIndex) => otherIndex !== index && Number(other.weightGrams) === Number(item.size))}>{packagingDisplay(Number(item.size))}</option>)}</select></div><div className="col-md-3"><label className="form-label">MRP (₹) *</label><input className="form-control" type="number" min="0.01" step="0.01" value={Number(option.mrp ?? 0)} onChange={e => updateSellingOption(index, { mrp: Number(e.target.value) })} required /></div><div className="col-md-3"><label className="form-label">Selling Price (₹) *</label><input className="form-control" type="number" min="0.01" step="0.01" value={Number(option.price ?? 0)} onChange={e => updateSellingOption(index, { price: Number(e.target.value) })} required /></div><div className="col-md-2"><button type="button" className="btn btn-outline-danger w-100" onClick={() => removeSellingOption(index)}><i className="bi bi-trash me-1" />Remove</button></div></div>)}</div></div></div>
+        </div></div><div className="card-footer d-flex justify-content-end gap-2"><button type="button" className="btn btn-secondary" onClick={reset}>Cancel</button><button className="btn btn-success" disabled={saving || loading}>{saving ? "Saving..." : editing ? "Update Product" : "Create Product"}</button></div></div></form>}
   </div></AdminPage>;
 }

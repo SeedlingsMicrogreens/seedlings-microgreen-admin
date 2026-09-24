@@ -1,3 +1,8 @@
+export type GrowingPhase = {
+  phase: string;
+  noOfDays: number;
+};
+
 export type ProductStatus =
   | "active"
   | "inactive"
@@ -29,6 +34,8 @@ export type Product = {
 
   /** Production profile used by Growing Batches and Forecasting. */
   growingActive: boolean;
+  growingPhases?: GrowingPhase[];
+  soakingRequired?: boolean;
   growingCycleDays: number;
   expectedYieldGramsPerTray: number;
   minimumYieldGramsPerTray: number;
@@ -54,6 +61,9 @@ export type Product = {
 export type ProductSellingOption = {
   id: string;
   weightGrams: number;
+  /** Original/reference price for this salable option. */
+  mrp?: number;
+  /** Customer-facing selling price. */
   price: number;
   active: boolean;
 };

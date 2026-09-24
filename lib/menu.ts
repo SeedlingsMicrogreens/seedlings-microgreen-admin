@@ -74,6 +74,7 @@ export const menuItems: MenuNode[] = [
     children: [
       { type: "item", text: "Microgreen", href: "/products", icon: "bi-box-seam" },
       { type: "item", text: "Products", href: "/sales-products", icon: "bi-bag-check" },
+      { type: "item", text: "Offers Master", href: "/offers", icon: "bi-percent" },
       { type: "item", text: "Packaging Master", href: "/packaging-masters", icon: "bi-box2" },
       { type: "item", text: "Subscription Plans", href: "/subscription-masters", icon: "bi-arrow-repeat" },
       { type: "item", text: "Pincode Master", href: "/geolocations", icon: "bi-geo-alt" },

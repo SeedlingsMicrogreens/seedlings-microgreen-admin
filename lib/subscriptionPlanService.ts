@@ -6,6 +6,7 @@ export async function createSubscriptionPlan(input: Omit<SubscriptionPlan,"id"|"
   if (!input.salableProductName?.trim()) throw new Error("Salable Product name is required.");
   if (!input.name.trim()) throw new Error("Plan name is required.");
   if (input.deliveriesPerTerm < 1) throw new Error("Deliveries per term must be at least 1.");
+  if (!Number.isInteger(input.skipsAllowed) || input.skipsAllowed < 0) throw new Error("Skips allowed must be a non-negative whole number.");
   if (input.price < 0 || input.deliveryCharge < 0) throw new Error("Prices cannot be negative.");
   return createRecord("subscriptionPlans", input as Record<string,unknown>);
 }
