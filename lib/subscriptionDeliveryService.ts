@@ -40,8 +40,6 @@ export async function createSubscriptionDeliveryAtHandoverInTransaction(
   const deliveryRef = doc(db, "subscriptionDeliveries", deliveryId);
   const deliverySnap = await transaction.get(deliveryRef);
 
-  if (deliverySnap.exists()) return deliveryId;
-
   const deliveryDate = currentOrder.scheduledDeliveryDate || subscription.nextDeliveryDate;
   if (!deliveryDate) throw new Error("Subscription delivery date is missing.");
 
@@ -62,11 +60,20 @@ export async function createSubscriptionDeliveryAtHandoverInTransaction(
     deliveryAddress: currentOrder.deliveryAddress as Record<string, unknown> | undefined,
   };
 
-  transaction.set(deliveryRef, {
-    ...data,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
+  if (deliverySnap.exists()) {
+    transaction.update(deliveryRef, {
+      status: "out_for_delivery",
+      updatedAt: serverTimestamp(),
+      lastUpdatedByUid: uid,
+      lastUpdatedByEmail: email ?? "",
+    });
+  } else {
+    transaction.set(deliveryRef, {
+      ...data,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
 
   transaction.update(subscriptionRef, {
     deliveriesGenerated: Math.max(currentGenerated, deliveryNumber),

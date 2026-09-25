@@ -4,27 +4,20 @@ import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { listCollection } from "@/lib/firestore";
-import { listManualFulfilments, packSalableProducts } from "@/lib/fulfilmentService";
-import type { Product } from "@/types/catalog";
+import { listManualFulfilments, packOrderFulfilment } from "@/lib/fulfilmentService";
+import { packagingDisplay } from "@/types/packaging";
+import type { Packaging } from "@/types/packaging";
 import type { SalesProduct } from "@/types/salesProduct";
-import type { Fulfilment, PackingLine } from "@/types/fulfilment";
-import type { Order } from "@/types/order";
-import type { GrowingBatch } from "@/types/growingBatch";
-
-type DraftLine = PackingLine & { key: string };
-const newLine = (): DraftLine => ({
-  key: `${Date.now()}-${Math.random()}`,
-  salableProductId: "",
-  boxGrams: 0,
-  quantityPacked: 1,
-});
+import type { Fulfilment, FulfilmentPackLine } from "@/types/fulfilment";
+import type { Order, OrderItem } from "@/types/order";
+import type { SubscriptionDelivery } from "@/types/subscriptionDelivery";
 
 function numberValue(value: unknown) {
   const n = Number(value ?? 0);
   return Number.isFinite(n) ? n : 0;
 }
 
-function formatTimestamp(value: unknown) {
+function dateValue(value: unknown) {
   if (value && typeof value === "object" && "toDate" in value && typeof (value as { toDate?: unknown }).toDate === "function") {
     return (value as { toDate: () => Date }).toDate().toLocaleString();
   }
@@ -32,14 +25,57 @@ function formatTimestamp(value: unknown) {
   return "—";
 }
 
+function requiredGrams(item: OrderItem) {
+  return Math.max(0, Math.round(numberValue(item.weightGrams) * numberValue(item.quantity)));
+}
+
+function packLabel(size: number) {
+  return packagingDisplay(size);
+}
+
+function defaultPackaging(remaining: number, options: Packaging[]) {
+  const sizes = options.map(x => Math.round(numberValue(x.size))).filter(x => x > 0).sort((a, b) => b - a);
+  if (!sizes.length || remaining <= 0) return 0;
+  const exact = sizes.find(size => remaining % size === 0);
+  if (exact) return exact;
+  return sizes.find(size => size <= remaining) ?? sizes[sizes.length - 1];
+}
+
+function defaultBoxes(remaining: number, boxGrams: number) {
+  if (!remaining || !boxGrams) return 0;
+  if (remaining % boxGrams === 0) return remaining / boxGrams;
+  return Math.floor(remaining / boxGrams);
+}
+
+function componentPreview(salable: SalesProduct | undefined, boxGrams: number) {
+  if (!salable || !boxGrams) return [];
+  if (salable.type === "single") {
+    return salable.components.map(c => ({ name: c.productName, grams: boxGrams }));
+  }
+  const components = salable.components ?? [];
+  const fallbackTotal = components.reduce((sum, c) => sum + Math.max(0, numberValue(c.quantityGrams)), 0);
+  const shares = components.map(c => {
+    const percentage = numberValue(c.percentage);
+    return percentage > 0 ? percentage : (fallbackTotal > 0 ? numberValue(c.quantityGrams) / fallbackTotal * 100 : 0);
+  });
+  const total = shares.reduce((sum, x) => sum + x, 0);
+  const rows = components.map((c, index) => ({ name: c.productName, grams: Math.round(boxGrams * shares[index] / total) }));
+  const diff = boxGrams - rows.reduce((sum, row) => sum + row.grams, 0);
+  if (rows.length) rows[rows.length - 1].grams += diff;
+  return rows;
+}
+
+type PackDraft = FulfilmentPackLine & { key: string };
+
 export default function FulfilmentPage() {
   const { user } = useAuth();
-  const [products, setProducts] = useState<Product[]>([]);
-  const [salableProducts, setSalableProducts] = useState<SalesProduct[]>([]);
-  const [batches, setBatches] = useState<GrowingBatch[]>([]);
-  const [history, setHistory] = useState<Fulfilment[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [lines, setLines] = useState<DraftLine[]>([newLine()]);
+  const [salableProducts, setSalableProducts] = useState<SalesProduct[]>([]);
+  const [packaging, setPackaging] = useState<Packaging[]>([]);
+  const [history, setHistory] = useState<Fulfilment[]>([]);
+  const [subscriptionDeliveries, setSubscriptionDeliveries] = useState<SubscriptionDelivery[]>([]);
+  const [selectedOrderId, setSelectedOrderId] = useState("");
+  const [drafts, setDrafts] = useState<PackDraft[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
@@ -49,244 +85,131 @@ export default function FulfilmentPage() {
   async function load() {
     setLoading(true);
     try {
-      const [productionProducts, salesProducts, growingBatches, fulfilments, ordersList] = await Promise.all([
-        listCollection<Product>("products"),
-        listCollection<SalesProduct>("salesProducts"),
-        listCollection<GrowingBatch>("growingBatches"),
-        listManualFulfilments(),
+      const [orderData, salesData, packagingData, fulfilmentData, subscriptionDeliveryData] = await Promise.all([
         listCollection<Order>("orders", "createdAt"),
+        listCollection<SalesProduct>("salesProducts"),
+        listCollection<Packaging>("packagingMaster", "size"),
+        listManualFulfilments(),
+        listCollection<SubscriptionDelivery>("subscriptionDeliveries", "deliveryDate"),
       ]);
-      setProducts(productionProducts);
-      setSalableProducts(salesProducts);
-      setBatches(growingBatches);
-      setHistory(fulfilments);
-      setOrders(ordersList);
+      setOrders(orderData);
+      setSalableProducts(salesData);
+      setPackaging(packagingData.filter(x => x.active && Number(x.size) > 0).sort((a, b) => Number(b.size) - Number(a.size)));
+      setHistory(fulfilmentData);
+      setSubscriptionDeliveries(subscriptionDeliveryData);
       setError("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to load packaging data.");
+      setError(e instanceof Error ? e.message : "Unable to load fulfilment data.");
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    void load();
-  }, []);
+  useEffect(() => { void load(); }, []);
 
-  const stockById = useMemo(
-    () => new Map(products.map((product) => [product.id, numberValue(product.stockGrams ?? product.stock)])),
-    [products]
-  );
-  const productById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
-  const salableById = useMemo(
-    () => new Map(salableProducts.map((salableProduct) => [salableProduct.id, salableProduct])),
-    [salableProducts]
+  const salableById = useMemo(() => new Map(salableProducts.map(p => [p.id, p])), [salableProducts]);
+
+  const orderById = useMemo(() => new Map(orders.map(order => [order.id, order])), [orders]);
+  const subscriptionDeliveryById = useMemo(
+    () => new Map(subscriptionDeliveries.map(delivery => [delivery.id, delivery])),
+    [subscriptionDeliveries],
   );
 
-  const preview = useMemo(() => {
-    const requirements = new Map<string, { productName: string; required: number; available: number }>();
-    const invalid: string[] = [];
+  // Fulfilment records stay in Firestore permanently. Only the active history
+  // view is cleared once the linked order/delivery reaches Delivered.
+  const activeHistory = useMemo(() => history.filter(record => {
+    const delivery = record.subscriptionDeliveryId
+      ? subscriptionDeliveryById.get(record.subscriptionDeliveryId)
+      : undefined;
+    const order = record.orderId ? orderById.get(record.orderId) : undefined;
+    const status = delivery?.status || order?.status;
+    return status !== "delivered";
+  }), [history, orderById, subscriptionDeliveryById]);
 
-    for (const line of lines) {
-      const salable = salableById.get(line.salableProductId);
-      if (!salable) continue;
+  const pendingOrders = useMemo(() => orders
+    .filter(order => order.paymentStatus === "paid")
+    .filter(order => !["packed", "delivered", "cancelled", "out_for_delivery"].includes(order.status))
+    .filter(order => order.packingStatus !== "packed")
+    .sort((a, b) => String(a.scheduledDeliveryDate || "").localeCompare(String(b.scheduledDeliveryDate || "")) || String(a.orderNumber || a.id).localeCompare(String(b.orderNumber || b.id))), [orders]);
 
-      const recipeGrams = salable.components.reduce(
-        (sum, component) => sum + numberValue(component.quantityGrams),
-        0
-      );
-      const boxGrams = numberValue(line.boxGrams);
-      const quantityPacked = numberValue(line.quantityPacked);
+  const selectedOrder = orders.find(order => order.id === selectedOrderId);
 
-      if (!Number.isInteger(boxGrams) || boxGrams <= 0) {
-        invalid.push(`${salable.name}: enter valid Box Gms.`);
-      } else if (recipeGrams !== boxGrams) {
-        invalid.push(`${salable.name}: Box Gms should be ${recipeGrams} gms for its recipe.`);
-      }
-
-      if (!Number.isInteger(quantityPacked) || quantityPacked <= 0) {
-        invalid.push(`${salable.name}: enter a positive whole quantity.`);
-      }
-
-      for (const component of salable.components) {
-        const required = numberValue(component.quantityGrams) * quantityPacked;
-        const existing = requirements.get(component.productId);
-        requirements.set(component.productId, {
-          productName: component.productName || productById.get(component.productId)?.name || "Unknown product",
-          required: (existing?.required ?? 0) + required,
-          available: stockById.get(component.productId) ?? 0,
-        });
-      }
-    }
-
-    const rows = [...requirements.entries()].map(([productId, values]) => ({
-      productId,
-      ...values,
-      remaining: values.available - values.required,
-    }));
-
-    return {
-      rows,
-      invalid,
-      hasShortage: rows.some((row) => row.remaining < 0),
-    };
-  }, [lines, productById, salableById, stockById]);
-
-  const canPack = Boolean(
-    user &&
-      lines.length &&
-      lines.every((line) => line.salableProductId) &&
-      !preview.invalid.length &&
-      !preview.hasShortage
-  );
-
-  function updateLine(key: string, patch: Partial<DraftLine>) {
-    setLines((current) =>
-      current.map((line) => {
-        if (line.key !== key) return line;
-        const next = { ...line, ...patch };
-        if (patch.salableProductId !== undefined) {
-          const salable = salableById.get(patch.salableProductId);
-          next.boxGrams = salable
-            ? salable.components.reduce((sum, component) => sum + numberValue(component.quantityGrams), 0)
-            : 0;
-        }
-        return next;
-      })
-    );
+  function openOrder(order: Order) {
+    setSelectedOrderId(order.id);
+    const next = (order.items ?? []).map((item, index) => {
+      const remaining = Math.max(0, requiredGrams(item) - numberValue(item.packedGrams));
+      const size = defaultPackaging(remaining, packaging);
+      return {
+        key: `${order.id}-${index}`,
+        orderItemIndex: index,
+        boxGrams: size,
+        boxesPacked: defaultBoxes(remaining, size),
+      };
+    });
+    setDrafts(next);
+    setMessage("");
+    setError("");
   }
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  function updateDraft(index: number, patch: Partial<PackDraft>) {
+    setDrafts(current => current.map((draft, i) => {
+      if (i !== index) return draft;
+      const next = { ...draft, ...patch };
+      if (patch.boxGrams !== undefined && selectedOrder) {
+        const item = selectedOrder.items[next.orderItemIndex];
+        const remaining = Math.max(0, requiredGrams(item) - numberValue(item.packedGrams));
+        next.boxesPacked = defaultBoxes(remaining, next.boxGrams);
+      }
+      return next;
+    }));
+  }
+
+  const draftValidation = useMemo(() => {
+    if (!selectedOrder) return { errors: [], full: false };
+    const errors: string[] = [];
+    let full = true;
+    for (const draft of drafts) {
+      const item = selectedOrder.items[draft.orderItemIndex];
+      const salable = salableById.get(item?.salableProductId || item?.productId);
+      const required = item ? requiredGrams(item) : 0;
+      const packedBefore = item ? numberValue(item.packedGrams) : 0;
+      const remaining = Math.max(0, required - packedBefore);
+      const packedNow = draft.boxGrams * draft.boxesPacked;
+      if (!item || !salable) errors.push(`Order item ${draft.orderItemIndex + 1} could not be resolved.`);
+      if (!draft.boxGrams || !packaging.some(p => Number(p.size) === draft.boxGrams)) errors.push(`${salable?.name || "Product"}: select an active Packaging Master size.`);
+      if (!Number.isInteger(draft.boxesPacked) || draft.boxesPacked < 1) errors.push(`${salable?.name || "Product"}: boxes must be at least 1.`);
+      if (packedNow > remaining) errors.push(`${salable?.name || "Product"}: selected boxes exceed the remaining ${remaining.toLocaleString()} gms.`);
+      if (packedNow !== remaining) full = false;
+    }
+    return { errors, full };
+  }, [drafts, packaging, salableById, selectedOrder]);
+
+  async function pack() {
+    if (!user || !selectedOrder || draftValidation.errors.length) return;
+    setWorking(true);
     setError("");
     setMessage("");
-    if (!user || !canPack) return;
-
-    setWorking(true);
     try {
-      await packSalableProducts(
-        lines.map(({ key: _key, ...line }) => ({
-          ...line,
-          boxGrams: numberValue(line.boxGrams),
-          quantityPacked: numberValue(line.quantityPacked),
-        })),
-        salableProducts,
-        user.uid,
-        user.email ?? undefined
-      );
-      setMessage("Packing completed successfully. Microgreen stock and Product packed stock were updated atomically.");
-      setLines([newLine()]);
+      const result = await packOrderFulfilment(selectedOrder.id, drafts.map(({ key: _key, ...draft }) => draft), user.uid, user.email ?? undefined);
+      setMessage(result.packedCompletely
+        ? `${selectedOrder.orderNumber || selectedOrder.id} is fully packed. It has been removed from pending packing.`
+        : `${selectedOrder.orderNumber || selectedOrder.id} was partially packed. The remaining requirement stays pending.`);
+      setSelectedOrderId("");
+      setDrafts([]);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to complete packaging.");
+      setError(e instanceof Error ? e.message : "Unable to complete fulfilment packing.");
     } finally {
       setWorking(false);
     }
   }
-
-  const boxRequirements = useMemo(() => {
-    type Requirement = {
-      salableProductId: string;
-      productName: string;
-      weightGrams: number;
-      boxes: number;
-      type: SalesProduct["type"];
-    };
-
-    const requirements = new Map<string, Requirement>();
-
-    for (const order of orders) {
-      // Demand remains required until the order is delivered or cancelled.
-      if (order.status === "delivered" || order.status === "cancelled") continue;
-
-      for (const item of order.items ?? []) {
-        const salableId = item.salableProductId || item.productId;
-        const salable = salableById.get(salableId);
-        if (!salable) continue;
-
-        const boxes = Math.max(0, Math.round(numberValue(item.quantity)));
-        if (!boxes) continue;
-
-        // The order item's weight is the actual customer-selected pack size.
-        // Fall back to the salable product recipe total for legacy orders.
-        const weightGrams = Math.max(
-          0,
-          Math.round(
-            numberValue(item.weightGrams) ||
-              salable.components.reduce((sum, component) => sum + numberValue(component.quantityGrams), 0)
-          )
-        );
-        if (!weightGrams) continue;
-
-        const key = `${salableId}::${weightGrams}`;
-        const existing = requirements.get(key);
-        requirements.set(key, {
-          salableProductId: salableId,
-          productName: item.productName || salable.name,
-          weightGrams,
-          boxes: (existing?.boxes ?? 0) + boxes,
-          type: salable.type,
-        });
-      }
-    }
-
-    return [...requirements.values()].sort(
-      (a, b) => a.productName.localeCompare(b.productName) || a.weightGrams - b.weightGrams
-    );
-  }, [orders, salableById]);
-
-  // This is the persistent loose-stock view. It does not depend on the current worksheet.
-  // Actual Produced = cumulative net usable grams recorded by harvested Growing Batch items.
-  // Packaging is split between Single Products and Combo Products.
-  const productAvailableRows = useMemo(() => {
-    const actualProduced = new Map<string, number>();
-
-    for (const batch of batches) {
-      for (const item of batch.items ?? []) {
-        if (item.status !== "completed_harvested") continue;
-        const usable = numberValue(item.actualYieldGrams);
-        actualProduced.set(item.productId, (actualProduced.get(item.productId) ?? 0) + usable);
-      }
-    }
-
-    const individualPackaging = new Map<string, number>();
-    const comboPackaging = new Map<string, number>();
-
-    for (const record of history) {
-      const isCombo = record.items.length > 1 || salableById.get(record.salableProductId)?.type === "multiple";
-      const target = isCombo ? comboPackaging : individualPackaging;
-      for (const item of record.items ?? []) {
-        target.set(item.productId, (target.get(item.productId) ?? 0) + numberValue(item.totalGrams));
-      }
-    }
-
-    return products
-      .map((product) => {
-        const produced = actualProduced.get(product.id) ?? 0;
-        const individual = individualPackaging.get(product.id) ?? 0;
-        const combo = comboPackaging.get(product.id) ?? 0;
-        const available = produced - individual - combo;
-        return {
-          productId: product.id,
-          productName: product.name,
-          actualProduced: produced,
-          individualPackaging: individual,
-          comboPackaging: combo,
-          available,
-          currentStock: stockById.get(product.id) ?? 0,
-        };
-      })
-      .sort((a, b) => a.productName.localeCompare(b.productName));
-  }, [batches, history, products, salableById, stockById]);
 
   return (
     <AdminPage>
       <div className="container-fluid py-3">
         <div className="mb-3">
           <h1 className="h3 seedlings-brand mb-1">Packing & Fulfilment</h1>
-          <p className="text-muted mb-0">
-            Prepare multiple Products in one packing worksheet and see the loose Microgreen stock impact before saving.
-          </p>
+          <p className="text-muted mb-0">Pack harvested Microgreens directly against customer orders. No Salable Product packed stock is maintained.</p>
         </div>
 
         {message && <div className="alert alert-success">{message}</div>}
@@ -295,319 +218,96 @@ export default function FulfilmentPage() {
         <div className="card border-0 shadow-sm mb-4">
           <div className="card-header d-flex justify-content-between align-items-center">
             <div>
-              <strong>Box Requirement</strong>
-              <div className="small text-muted">Direct packing requirement from all open orders. Delivered and cancelled orders are excluded.</div>
+              <strong>Pending Packing Requirements</strong>
+              <div className="small text-muted">Only paid, not-yet-packed orders are shown. One-time and subscription orders use the same packing workflow.</div>
             </div>
-            <span className="badge text-bg-primary">
-              {boxRequirements.reduce((sum, row) => sum + row.boxes, 0).toLocaleString()} boxes
-            </span>
-          </div>
-          <div className="card-body">
-            {!loading && !boxRequirements.length && (
-              <div className="text-center text-muted py-3">No open order boxes to prepare.</div>
-            )}
-            {loading && (
-              <div className="text-center py-3"><span className="spinner-border spinner-border-sm me-2" />Loading...</div>
-            )}
-            <div className="row g-3">
-              {boxRequirements.map((row) => (
-                <div className="col-12 col-md-6 col-xl-4" key={`${row.salableProductId}-${row.weightGrams}`}>
-                  <div className="border rounded-3 p-3 h-100 bg-light-subtle">
-                    <div className="fw-bold fs-5 mb-2">{row.productName}</div>
-                    <div className="d-flex align-items-center justify-content-between gap-3">
-                      <span className="badge text-bg-light border fs-6 fw-normal">{row.weightGrams.toLocaleString()} gms</span>
-                      <span className="fw-bold fs-5">{row.boxes.toLocaleString()} boxes</span>
-                    </div>
-                    {row.type === "multiple" && (
-                      <div className="small text-muted mt-2">Combo box</div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="card border-0 shadow-sm">
-          <div className="card-header d-flex justify-content-between align-items-center">
-            <strong>Manual Packing Worksheet</strong>
-            <button
-              type="button"
-              className="btn btn-outline-primary btn-sm"
-              onClick={() => setLines((current) => [...current, newLine()])}
-            >
-              + Add Product
-            </button>
-          </div>
-
-          <form onSubmit={submit}>
-            <div className="card-body">
-              <div className="alert alert-info small">
-                Select a <strong>Product</strong>, enter its <strong>Box Gms</strong> and <strong>Quantity</strong>. Box Gms must match the Product recipe total. Combo recipes are expanded into their Microgreens automatically.
-              </div>
-
-              <div className="table-responsive">
-                <table className="table align-middle">
-                  <thead>
-                    <tr>
-                      <th style={{ minWidth: 300 }}>Product</th>
-                      <th style={{ width: 150 }}>Box Gms</th>
-                      <th style={{ width: 150 }}>Quantity</th>
-                      <th style={{ width: 60 }} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {lines.map((line) => {
-                      const selected = salableById.get(line.salableProductId);
-                      const recipeGrams = selected?.components.reduce(
-                        (sum, component) => sum + numberValue(component.quantityGrams),
-                        0
-                      ) ?? 0;
-
-                      return (
-                        <tr key={line.key}>
-                          <td>
-                            <select
-                              className="form-select"
-                              value={line.salableProductId}
-                              onChange={(e) => updateLine(line.key, { salableProductId: e.target.value })}
-                              required
-                            >
-                              <option value="">Select Product</option>
-                              {salableProducts
-                                .filter((product) => product.active)
-                                .map((product) => (
-                                  <option key={product.id} value={product.id}>
-                                    {product.name}{product.sku ? ` (${product.sku})` : ""}
-                                  </option>
-                                ))}
-                            </select>
-                            {selected && (
-                              <div className="small text-muted mt-1">
-                                {selected.type === "single" ? "Single" : "Combo"} · Recipe: {recipeGrams.toLocaleString()}gms · Packed stock: {numberValue(selected.packedStockQuantity).toLocaleString()}
-                              </div>
-                            )}
-                          </td>
-                          <td>
-                            <input
-                              className="form-control"
-                              type="number"
-                              min="1"
-                              step="1"
-                              value={line.boxGrams || ""}
-                              onChange={(e) => updateLine(line.key, { boxGrams: numberValue(e.target.value) })}
-                              required
-                            />
-                            {selected && line.boxGrams !== recipeGrams && (
-                              <div className="small text-danger mt-1">Expected {recipeGrams}gms</div>
-                            )}
-                          </td>
-                          <td>
-                            <input
-                              className="form-control"
-                              type="number"
-                              min="1"
-                              step="1"
-                              value={line.quantityPacked}
-                              onChange={(e) => updateLine(line.key, { quantityPacked: numberValue(e.target.value) })}
-                              required
-                            />
-                          </td>
-                          <td>
-                            {lines.length > 1 && (
-                              <button
-                                type="button"
-                                className="btn btn-outline-danger btn-sm"
-                                title="Remove"
-                                onClick={() => setLines((current) => current.filter((item) => item.key !== line.key))}
-                              >
-                                ×
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="mt-4">
-                <h6 className="mb-2">Available After Packaging</h6>
-                <div className="table-responsive">
-                  <table className="table table-sm align-middle mb-0">
-                    <thead>
-                      <tr>
-                        <th>Microgreen</th>
-                        <th className="text-end">Required Gms</th>
-                        <th className="text-end">Available Gms</th>
-                        <th className="text-end">Available After Packaging</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {preview.rows.map((row) => (
-                        <tr key={row.productId}>
-                          <td>{row.productName}</td>
-                          <td className="text-end">{row.required.toLocaleString()} gms</td>
-                          <td className="text-end">{row.available.toLocaleString()} gms</td>
-                          <td className={`text-end fw-semibold ${row.remaining < 0 ? "text-danger" : "text-success"}`}>
-                            {row.remaining.toLocaleString()} gms
-                          </td>
-                        </tr>
-                      ))}
-                      {!preview.rows.length && (
-                        <tr>
-                          <td colSpan={4} className="text-center text-muted py-3">
-                            Select Products to see stock impact.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {preview.invalid.map((warning, index) => (
-                <div key={`${warning}-${index}`} className="alert alert-warning small mt-3 mb-0">
-                  {warning}
-                </div>
-              ))}
-              {preview.hasShortage && (
-                <div className="alert alert-danger small mt-3 mb-0">
-                  One or more Microgreens do not have enough loose stock. Nothing will be deducted until all rows can be packed.
-                </div>
-              )}
-            </div>
-
-            <div className="card-footer d-flex justify-content-end">
-              <button className="btn btn-success" disabled={working || loading || !canPack}>
-                {working ? "Packing..." : "Pack All"}
-              </button>
-            </div>
-          </form>
-        </div>
-
-        <div className="card border-0 shadow-sm mt-4">
-          <div className="card-header d-flex justify-content-between align-items-center">
-            <strong>Current Salable Packed Stock</strong>
-            <button type="button" className="btn btn-outline-secondary btn-sm" onClick={() => setShowHistory((value) => !value)}>
-              {showHistory ? "Hide Packaging History" : "Packaging History"}
-            </button>
+            <span className="badge text-bg-primary">{pendingOrders.length} orders</span>
           </div>
           <div className="table-responsive">
             <table className="table table-hover align-middle mb-0">
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th>Type</th>
-                  <th className="text-end">Packed Units</th>
-                </tr>
-              </thead>
+              <thead><tr><th>Order</th><th>Type</th><th>Customer</th><th>Delivery Date</th><th>Items / Requirement</th><th className="text-end">Action</th></tr></thead>
               <tbody>
-                {salableProducts.map((salableProduct) => (
-                  <tr key={salableProduct.id}>
-                    <td>
-                      <strong>{salableProduct.name}</strong>
-                      <div className="small text-muted">{salableProduct.sku || ""}</div>
-                    </td>
-                    <td>{salableProduct.type === "single" ? "Single" : "Combo"}</td>
-                    <td className="text-end">{numberValue(salableProduct.packedStockQuantity).toLocaleString()}</td>
-                  </tr>
-                ))}
-                {!loading && !salableProducts.length && (
-                  <tr>
-                    <td colSpan={3} className="text-center text-muted py-4">No products found.</td>
-                  </tr>
-                )}
+                {pendingOrders.map(order => <tr key={order.id}>
+                  <td><strong>{order.orderNumber || order.id}</strong><div className="small text-muted">{order.id.slice(0, 8)}</div></td>
+                  <td><span className={`badge text-bg-${order.orderType === "subscription" ? "info" : "secondary"}`}>{order.orderType === "subscription" ? "Subscription" : "One-time"}</span></td>
+                  <td><strong>{order.customerName || order.customerMobile || order.customerId}</strong><div className="small text-muted">{order.customerMobile || "—"}</div></td>
+                  <td>{order.scheduledDeliveryDate || "—"}</td>
+                  <td>{(order.items ?? []).map((item, index) => {
+                    const required = requiredGrams(item);
+                    const packed = numberValue(item.packedGrams);
+                    return <div key={`${order.id}-${index}`} className="small mb-1"><strong>{item.productName}</strong> · {required.toLocaleString()} gms · {Math.max(0, required - packed).toLocaleString()} gms pending</div>;
+                  })}</td>
+                  <td className="text-end"><button className="btn btn-sm btn-success" onClick={() => openOrder(order)}><i className="bi bi-box-seam me-1" />Pack</button></td>
+                </tr>)}
+                {!pendingOrders.length && !loading && <tr><td colSpan={6} className="text-center text-muted py-5">No pending paid orders require packing.</td></tr>}
+                {loading && <tr><td colSpan={6} className="text-center py-5"><span className="spinner-border spinner-border-sm me-2" />Loading...</td></tr>}
               </tbody>
             </table>
           </div>
         </div>
 
-        {showHistory && (
-          <div className="card border-0 shadow-sm mt-3">
-            <div className="card-header"><strong>Packaging History</strong></div>
+        {selectedOrder && <div className="card border-success shadow-sm mb-4">
+          <div className="card-header d-flex justify-content-between align-items-center">
+            <div><strong>Pack Order {selectedOrder.orderNumber || selectedOrder.id}</strong><div className="small text-muted">{selectedOrder.orderType === "subscription" ? "Subscription order" : "One-time order"} · {selectedOrder.customerName || selectedOrder.customerMobile || selectedOrder.customerId}</div></div>
+            <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => { setSelectedOrderId(""); setDrafts([]); }}>Close</button>
+          </div>
+          <div className="card-body">
+            <div className="alert alert-info small">Select the actual box size from Packaging Master. Boxes are auto-calculated from the remaining requirement, but can be changed. A combo shows the Microgreen grams inside each selected box based on its Product percentages.</div>
             <div className="table-responsive">
-              <table className="table table-hover align-middle mb-0">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Product</th>
-                    <th>Box Gms</th>
-                    <th>Quantity Packed</th>
-                    <th>Gram Stock Consumed</th>
-                    <th>Components</th>
-                  </tr>
-                </thead>
+              <table className="table align-middle">
+                <thead><tr><th>Product</th><th>Requirement</th><th>Box Gms</th><th>Boxes</th><th>Packed</th><th>Microgreens / Box</th></tr></thead>
                 <tbody>
-                  {history.map((record) => (
-                    <tr key={record.id}>
-                      <td>{formatTimestamp(record.packedAt)}</td>
-                      <td>
-                        <strong>{record.salableProductName}</strong>
-                        <div className="small text-muted">{record.salableProductSku || ""}</div>
-                      </td>
-                      <td>{record.boxGrams ? `${record.boxGrams.toLocaleString()} gms` : "—"}</td>
-                      <td>{record.quantityPacked}</td>
-                      <td>{numberValue(record.totalGramsConsumed).toLocaleString()} gms</td>
-                      <td>{(record.items ?? []).map((item) => `${item.productName} ${numberValue(item.totalGrams)} gms`).join(" + ")}</td>
-                    </tr>
-                  ))}
-                  {!loading && !history.length && (
-                    <tr>
-                      <td colSpan={6} className="text-center text-muted py-4">No packaging history yet.</td>
-                    </tr>
-                  )}
-                  {loading && (
-                    <tr>
-                      <td colSpan={6} className="text-center py-4"><span className="spinner-border spinner-border-sm me-2" />Loading...</td>
-                    </tr>
-                  )}
+                  {drafts.map((draft, index) => {
+                    const item = selectedOrder.items[draft.orderItemIndex];
+                    const salable = salableById.get(item.salableProductId || item.productId);
+                    const required = requiredGrams(item);
+                    const before = numberValue(item.packedGrams);
+                    const remaining = Math.max(0, required - before);
+                    const packedNow = draft.boxGrams * draft.boxesPacked;
+                    const preview = componentPreview(salable, draft.boxGrams);
+                    return <tr key={draft.key}>
+                      <td><strong>{item.productName}</strong><div className="small text-muted">{salable?.type === "multiple" ? "Combo" : "Single"}</div></td>
+                      <td>{required.toLocaleString()} gms<div className="small text-muted">{remaining.toLocaleString()} gms remaining</div></td>
+                      <td style={{ minWidth: 160 }}><select className="form-select" value={draft.boxGrams || ""} onChange={e => updateDraft(index, { boxGrams: Number(e.target.value) })}><option value="">Select packaging</option>{packaging.map(p => <option key={p.id} value={p.size}>{packLabel(Number(p.size))}</option>)}</select></td>
+                      <td style={{ width: 120 }}><input className="form-control" type="number" min="1" step="1" value={draft.boxesPacked || ""} onChange={e => updateDraft(index, { boxesPacked: Number(e.target.value) })}/></td>
+                      <td><strong>{packedNow.toLocaleString()} gms</strong>{packedNow !== remaining && <div className="small text-warning">{Math.max(0, remaining - packedNow).toLocaleString()} gms will remain</div>}</td>
+                      <td><div className="small">{preview.map((row, i) => <span key={`${row.name}-${i}`} className="badge text-bg-light border me-1 mb-1 fw-normal">{row.name}: {row.grams}g</span>)}</div></td>
+                    </tr>;
+                  })}
                 </tbody>
               </table>
             </div>
+            {draftValidation.errors.map((text, index) => <div key={`${text}-${index}`} className="alert alert-danger py-2 small mb-2">{text}</div>)}
+            {!draftValidation.errors.length && !draftValidation.full && <div className="alert alert-warning py-2 small">This is a partial packing. The order will remain in Pending Packing until the remaining grams are packed.</div>}
           </div>
-        )}
+          <div className="card-footer d-flex justify-content-end gap-2">
+            <button type="button" className="btn btn-secondary" onClick={() => { setSelectedOrderId(""); setDrafts([]); }}>Cancel</button>
+            <button type="button" className="btn btn-success" disabled={working || loading || !!draftValidation.errors.length} onClick={() => void pack()}>{working ? "Packing..." : draftValidation.full ? "Complete Packing" : "Pack Selected Quantity"}</button>
+          </div>
+        </div>}
 
-        <div className="card border-0 shadow-sm mt-4">
-          <div className="card-header"><strong>Product Available</strong></div>
-          <div className="card-body p-0">
-            <div className="alert alert-light border-0 rounded-0 mb-0 small">
-              <strong>Product Available = Actual Produced − Individual Packaging − Packaging in Combo.</strong>{" "}
-              Actual Produced is the cumulative net usable grams recorded from harvested Growing Batches. This list is independent of the current packing worksheet and remains visible after completed packaging.
-            </div>
-            <div className="table-responsive">
-              <table className="table table-hover align-middle mb-0">
-                <thead>
-                  <tr>
-                    <th>Product</th>
-                    <th className="text-end">Actual Produced</th>
-                    <th className="text-end">Individual Packaging</th>
-                    <th className="text-end">Packaging in Combo</th>
-                    <th className="text-end">Product Available</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {productAvailableRows.map((row) => (
-                    <tr key={row.productId}>
-                      <td><strong>{row.productName}</strong></td>
-                      <td className="text-end">{row.actualProduced.toLocaleString()} gms</td>
-                      <td className="text-end">{row.individualPackaging.toLocaleString()} gms</td>
-                      <td className="text-end">{row.comboPackaging.toLocaleString()} gms</td>
-                      <td className={`text-end fw-semibold ${row.available < 0 ? "text-danger" : ""}`}>
-                        {row.available.toLocaleString()} gms
-                      </td>
-                    </tr>
-                  ))}
-                  {!loading && !productAvailableRows.length && (
-                    <tr>
-                      <td colSpan={5} className="text-center text-muted py-4">No microgreens found.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+        <div className="card border-0 shadow-sm">
+          <div className="card-header d-flex justify-content-between align-items-center">
+            <div><strong>Fulfilment History</strong><div className="small text-muted">Active packing records remain here until the linked Order or Subscription Delivery is delivered. Delivered records remain stored in Firestore but are removed from this view.</div></div>
+            <button type="button" className="btn btn-outline-secondary btn-sm" onClick={() => setShowHistory(v => !v)}>{showHistory ? "Hide History" : "Show History"}</button>
           </div>
+          {showHistory && <div className="table-responsive">
+            <table className="table table-hover align-middle mb-0">
+              <thead><tr><th>Date</th><th>Type</th><th>Order</th><th>Subscription Delivery</th><th>Packed</th><th>Batch Allocation</th><th>Status</th></tr></thead>
+              <tbody>
+                {activeHistory.map(record => <tr key={record.id}>
+                  <td>{dateValue(record.packedAt)}</td>
+                  <td><span className={`badge text-bg-${record.fulfilmentType === "SUBSCRIPTION" ? "info" : "secondary"}`}>{record.fulfilmentType || "ORDER"}</span></td>
+                  <td><strong>{record.orderNumber || record.orderId || "—"}</strong><div className="small text-muted">{record.customerName || ""}</div></td>
+                  <td>{record.subscriptionDeliveryId || "—"}</td>
+                  <td>{numberValue(record.totalGramsConsumed).toLocaleString()} gms</td>
+                  <td><div className="small">{(record.allocations ?? []).map((a, i) => <div key={`${a.growingBatchId}-${a.productId}-${i}`}>{a.growingBatchNumber}: {a.productName} {numberValue(a.quantityGrams).toLocaleString()}g</div>)}</div></td>
+                  <td><span className={`badge text-bg-${record.status === "packed" ? "success" : "warning"}`}>{record.status}</span></td>
+                </tr>)}
+                {!activeHistory.length && <tr><td colSpan={7} className="text-center text-muted py-4">No active fulfilment history.</td></tr>}
+              </tbody>
+            </table>
+          </div>}
         </div>
       </div>
     </AdminPage>

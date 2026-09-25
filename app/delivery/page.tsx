@@ -17,13 +17,6 @@ function userName(u: DeliveryUser) { return u.name?.trim() || "Unnamed delivery 
 function customerName(order: Order) { return order.customerName?.trim() || order.customerMobile || order.customerId; }
 function customerMobile(order: Order) { return order.customerMobile || order.deliveryAddress?.mobileNumber || "—"; }
 function numberValue(value: unknown) { const n = Number(value ?? 0); return Number.isFinite(n) ? n : 0; }
-function todayLocal() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
 function itemLabel(order: Order, item: Order["items"][number], salableById: Map<string, SalesProduct>) {
   const salable = salableById.get(item.salableProductId || item.productId);
   const name = item.productName || salable?.name || "Product";
@@ -74,19 +67,15 @@ export default function DeliveryPage() {
 
   const activeUsers = useMemo(() => users.filter(u => u.status === "active"), [users]);
   const salableById = useMemo(() => new Map(salableProducts.map(p => [p.id, p])), [salableProducts]);
-  const today = todayLocal();
-
-  // Packing is a separate manual operation. Once boxes have been packed, Delivery Operations
-  // is intentionally driven by the operational requirement: today's orders that are not terminal.
-  const todaysOrders = useMemo(() => orders
-    .filter(o => o.scheduledDeliveryDate === today && !["delivered", "cancelled"].includes(o.status))
-    .sort((a, b) => String(a.scheduledDeliveryDate || "").localeCompare(String(b.scheduledDeliveryDate || "")) || String(a.orderNumber || a.id).localeCompare(String(b.orderNumber || b.id))), [orders, today]);
-
+  // Delivery Operations is driven by packing state, not by the scheduled delivery date.
+  // Every fully packed order remains available for handover until it is assigned.
   const assignedOrderIds = useMemo(() => new Set(assignments.filter(a => !["delivered", "cancelled"].includes(a.status)).map(a => a.orderId)), [assignments]);
-  const readyForHandover = useMemo(() => todaysOrders.filter(o => !assignedOrderIds.has(o.id)), [todaysOrders, assignedOrderIds]);
+  const readyForHandover = useMemo(() => orders
+    .filter(o => !assignedOrderIds.has(o.id) && o.status === "packed")
+    .sort((a, b) => String(a.scheduledDeliveryDate || "").localeCompare(String(b.scheduledDeliveryDate || "")) || String(a.orderNumber || a.id).localeCompare(String(b.orderNumber || b.id))), [orders, assignedOrderIds]);
   const deliveryStatusAssignments = useMemo(() => assignments
-    .filter(a => todaysOrders.some(o => o.id === a.orderId))
-    .sort((a, b) => String(b.assignedAt ?? "").localeCompare(String(a.assignedAt ?? ""))), [assignments, todaysOrders]);
+    .filter(a => !["delivered", "cancelled"].includes(a.status))
+    .sort((a, b) => String(b.assignedAt ?? "").localeCompare(String(a.assignedAt ?? ""))), [assignments]);
 
   const filteredUsers = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -165,7 +154,7 @@ export default function DeliveryPage() {
       <div className="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-3">
         <div>
           <h1 className="h3 seedlings-brand mb-1">Delivery Operations</h1>
-          <p className="text-muted mb-0">Hand over today&apos;s packed orders and track delivery status.</p>
+          <p className="text-muted mb-0">Hand over packed orders and track delivery status.</p>
         </div>
         {tab === "users" && !selectedUser && <button className="btn btn-success" onClick={openCreate}><i className="bi bi-person-plus me-1" /> Add Delivery User</button>}
         {tab === "handover" && <div className="d-flex gap-2"><span className="badge text-bg-success align-self-center">{activeUsers.length} active users</span><span className="badge text-bg-warning align-self-center">{readyForHandover.length} awaiting handover</span></div>}
@@ -183,7 +172,7 @@ export default function DeliveryPage() {
       {tab === "handover" && <>
         <div className="card mb-3">
           <div className="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <div><h3 className="card-title mb-0">Today&apos;s Orders — Ready for Handover</h3><div className="small text-muted mt-1">Only orders scheduled for today and not delivered/cancelled are shown.</div></div>
+            <div><h3 className="card-title mb-0">Packed Orders — Ready for Handover</h3><div className="small text-muted mt-1">All fully packed orders are shown until they are handed over for delivery.</div></div>
             <button className="btn btn-sm btn-outline-secondary" onClick={selectAllVisible} disabled={!readyForHandover.length}>{selectedOrderIds.length === readyForHandover.length && readyForHandover.length ? "Clear selection" : "Select all"}</button>
           </div>
           <div className="card-body p-0">
@@ -199,8 +188,8 @@ export default function DeliveryPage() {
                 </div>
               </div>
             </div>)}
-            {!readyForHandover.length && !loading && <div className="text-center text-muted py-5"><i className="bi bi-check2-circle fs-2 d-block mb-2" />No orders awaiting handover for today.</div>}
-            {loading && <div className="text-center py-5"><span className="spinner-border spinner-border-sm me-2" />Loading today&apos;s orders...</div>}
+            {!readyForHandover.length && !loading && <div className="text-center text-muted py-5"><i className="bi bi-check2-circle fs-2 d-block mb-2" />No packed orders are awaiting handover.</div>}
+            {loading && <div className="text-center py-5"><span className="spinner-border spinner-border-sm me-2" />Loading packed orders...</div>}
           </div>
         </div>
 
@@ -221,7 +210,7 @@ export default function DeliveryPage() {
       </>}
 
       {tab === "status" && <div className="card">
-        <div className="card-header"><h3 className="card-title mb-0">Handover & Delivery Status</h3><div className="small text-muted mt-1">Orders handed over to a delivery user are marked Out for delivery and tracked here.</div></div>
+        <div className="card-header"><h3 className="card-title mb-0">Out for Delivery</h3><div className="small text-muted mt-1">Orders handed over to a delivery user remain here until they are delivered.</div></div>
         <div className="card-body p-0">
           {deliveryStatusAssignments.map(a => {
             const order = orders.find(o => o.id === a.orderId);
@@ -240,18 +229,24 @@ export default function DeliveryPage() {
               </div>
             </div>;
           })}
-          {!deliveryStatusAssignments.length && !loading && <div className="text-center text-muted py-5"><i className="bi bi-truck fs-2 d-block mb-2" />No handovers for today yet.</div>}
+          {!deliveryStatusAssignments.length && !loading && <div className="text-center text-muted py-5"><i className="bi bi-truck fs-2 d-block mb-2" />No active deliveries.</div>}
         </div>
       </div>}
 
       {tab === "subscriptionDeliveries" && <div className="card">
-        <div className="card-header"><h3 className="card-title mb-0">Actual Subscription Deliveries</h3><div className="small text-muted mt-1">One record is created only when a subscription order is actually handed over. Future deliveries are not stored here.</div></div>
+        <div className="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <div><h3 className="card-title mb-0">Subscription Deliveries</h3><div className="small text-muted mt-1">Informational view of individual subscription deliveries. Delivery actions are performed from Handover and Delivery Status.</div></div>
+          <span className="badge text-bg-light border text-dark"><i className="bi bi-eye me-1" /> Read only</span>
+        </div>
+        <div className="card-body border-bottom py-2">
+          <div className="small text-muted"><i className="bi bi-info-circle me-1" />These records are updated automatically when the related subscription order is packed, sent out for delivery, or delivered. Nothing can be changed or deleted from this tab.</div>
+        </div>
         <div className="table-responsive"><table className="table table-hover align-middle mb-0"><thead><tr><th>Delivery</th><th>Customer</th><th>Product</th><th>Delivery Date</th><th>Status</th><th>Order</th></tr></thead><tbody>
           {subscriptionDeliveries.map(d => {
             const order = orders.find(o => o.id === d.orderId);
             return <tr key={d.id}><td><strong>#{d.deliveryNumber}</strong><div className="small text-muted">{d.subscriptionId.slice(0, 8)}</div></td><td><strong>{d.customerName || d.customerMobile || d.customerId}</strong><div className="small text-muted">{d.customerMobile || "—"}</div></td><td>{d.productName}</td><td>{d.deliveryDate || "—"}</td><td><span className={`badge text-bg-${d.status === "delivered" ? "success" : d.status === "failed" ? "danger" : d.status === "cancelled" ? "secondary" : "info"}`}>{d.status.replaceAll("_", " ")}</span></td><td>{order?.orderNumber || d.orderNumber || d.orderId}</td></tr>;
           })}
-          {!subscriptionDeliveries.length && !loading && <tr><td colSpan={6} className="text-center text-muted py-5"><i className="bi bi-arrow-repeat fs-2 d-block mb-2" />No actual subscription deliveries have been handed over yet.</td></tr>}
+          {!subscriptionDeliveries.length && !loading && <tr><td colSpan={6} className="text-center text-muted py-5"><i className="bi bi-arrow-repeat fs-2 d-block mb-2" />No subscription delivery records available.</td></tr>}
           {loading && <tr><td colSpan={6} className="text-center py-5"><span className="spinner-border spinner-border-sm me-2" />Loading subscription deliveries...</td></tr>}
         </tbody></table></div>
       </div>}

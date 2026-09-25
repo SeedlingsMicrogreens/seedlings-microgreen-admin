@@ -1,186 +1,418 @@
-import { collection, doc, runTransaction, serverTimestamp } from "firebase/firestore";
+import { collection, doc, getDocs, orderBy, query, runTransaction, serverTimestamp, where, arrayUnion, type Transaction } from "firebase/firestore";
 import { db } from "./firebase";
 import { auditEvent } from "./firestore";
-import { listCollection } from "./firestore";
 import type { Product } from "@/types/catalog";
 import type { SalesProduct } from "@/types/salesProduct";
-import type { Fulfilment, PackingItem, PackingLine } from "@/types/fulfilment";
+import type { Order, OrderItem, OrderStatus } from "@/types/order";
+import type { GrowingBatch } from "@/types/growingBatch";
+import type { Subscription } from "@/types/subscription";
+import type { Fulfilment, FulfilmentPackLine, FulfilmentAllocation, PackingItem } from "@/types/fulfilment";
+import type { SubscriptionDelivery } from "@/types/subscriptionDelivery";
 
-export function validatePackingLine(line: PackingLine, salableProduct: SalesProduct) {
-  if (!salableProduct.active) throw new Error(`${salableProduct.name} is inactive.`);
-  if (!Number.isInteger(line.quantityPacked) || line.quantityPacked <= 0) {
-    throw new Error(`Quantity for ${salableProduct.name} must be a positive whole number.`);
-  }
-  if (!Number.isInteger(line.boxGrams) || line.boxGrams <= 0) {
-    throw new Error(`Box Gms for ${salableProduct.name} must be a positive whole number.`);
-  }
-  if (!salableProduct.components?.length) {
-    throw new Error(`${salableProduct.name} has no production product components.`);
-  }
-
-  const recipeGrams = salableProduct.components.reduce((sum, c) => sum + Number(c.quantityGrams), 0);
-  if (!salableProduct.components.every(c => Number.isInteger(Number(c.quantityGrams)) && Number(c.quantityGrams) > 0)) {
-    throw new Error(`${salableProduct.name} has an invalid component quantity.`);
-  }
-  if (recipeGrams !== line.boxGrams) {
-    throw new Error(`${salableProduct.name}: Box Gms (${line.boxGrams} gms) must match its component recipe total (${recipeGrams} gms).`);
-  }
+function numberValue(value: unknown) {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
 }
 
-export async function listManualFulfilments() {
-  return listCollection<Fulfilment>("fulfilments", "createdAt");
+function requiredItemGrams(item: OrderItem) {
+  return Math.max(0, Math.round(numberValue(item.weightGrams) * numberValue(item.quantity)));
 }
 
-/**
- * Pack multiple Salable Products as one atomic worksheet operation.
- * Every row has a Salable Product, box grams and quantity. Combo recipes are
- * expanded to their Production Products. Requirements are aggregated before
- * stock is checked, so shared Production Products are handled correctly.
- */
-export async function packSalableProducts(
-  lines: PackingLine[],
-  salableProducts: SalesProduct[],
+function componentGramsPerBox(salable: SalesProduct, boxGrams: number) {
+  const components = salable.components ?? [];
+  if (!components.length) throw new Error(`${salable.name} has no Microgreen components.`);
+
+  if (salable.type === "single") {
+    return components.map(component => ({
+      productId: component.productId,
+      productName: component.productName,
+      quantityGrams: boxGrams,
+    }));
+  }
+
+  const percentages = components.map(component => {
+    const percentage = numberValue(component.percentage);
+    if (percentage > 0) return percentage;
+    const legacyTotal = components.reduce((sum, c) => sum + Math.max(0, numberValue(c.quantityGrams)), 0);
+    return legacyTotal > 0 ? (numberValue(component.quantityGrams) / legacyTotal) * 100 : 0;
+  });
+  const totalPercentage = percentages.reduce((sum, value) => sum + value, 0);
+  if (!Number.isFinite(totalPercentage) || totalPercentage <= 0) {
+    throw new Error(`${salable.name} has invalid Microgreen percentages.`);
+  }
+
+  const result = components.map((component, index) => ({
+    productId: component.productId,
+    productName: component.productName,
+    quantityGrams: Math.round(boxGrams * percentages[index] / totalPercentage),
+  }));
+  const difference = boxGrams - result.reduce((sum, item) => sum + item.quantityGrams, 0);
+  if (result.length) result[result.length - 1].quantityGrams += difference;
+  return result;
+}
+
+function orderStatusCanBePacked(status: OrderStatus) {
+  return !["pending_payment", "cancelled", "delivered", "handed_to_delivery", "out_for_delivery"].includes(status);
+}
+
+function nextSubscriptionDeliveryDate(subscription: Subscription, deliveryDate: string, deliveryNumber: number) {
+  const total = Number(subscription.totalDeliveries || 0);
+  if (total > 0 && deliveryNumber >= total) return "";
+  const date = new Date(`${deliveryDate}T00:00:00`);
+  date.setDate(date.getDate() + 7);
+  return date.toISOString().slice(0, 10);
+}
+
+async function createOrUpdateSubscriptionDeliveryInTransaction(
+  transaction: Transaction,
+  order: Order,
+  subscription: Subscription,
+  fullyPacked: boolean,
   uid: string,
   email?: string,
 ) {
-  if (!lines.length) throw new Error("Add at least one Salable Product to pack.");
+  if (order.orderType !== "subscription" || !order.sourceSubscriptionId) return null;
 
-  const selectedById = new Map(salableProducts.map(x => [x.id, x]));
-  const cleanLines = lines.map(line => ({
-    salableProductId: line.salableProductId,
-    boxGrams: Number(line.boxGrams),
-    quantityPacked: Number(line.quantityPacked),
-  }));
+  const deliveryNumber = Math.max(
+    0,
+    Math.round(numberValue(order.sourceSubscriptionDeliveryNumber || 0)),
+  ) || Math.max(1, Math.round(numberValue(subscription.deliveriesGenerated || 0)) + 1);
+  const deliveryId = deliveryNumber > 0
+    ? `${subscription.id}_${deliveryNumber}`
+    : `${subscription.id}_${order.id}`;
+  const deliveryRef = doc(db, "subscriptionDeliveries", deliveryId);
+  const existingSnap = await transaction.get(deliveryRef);
+  const deliveryDate = order.scheduledDeliveryDate || subscription.nextDeliveryDate;
+  if (!deliveryDate) throw new Error("Subscription delivery date is missing.");
 
-  for (const line of cleanLines) {
-    const product = selectedById.get(line.salableProductId);
-    if (!product) throw new Error("One or more selected Salable Products could not be found. Refresh and retry.");
-    validatePackingLine(line, product);
+  const status: SubscriptionDelivery["status"] = fullyPacked ? "packed" : "pending";
+  const item = order.items?.[0];
+  const base = {
+    subscriptionId: subscription.id,
+    orderId: order.id,
+    orderNumber: order.orderNumber || order.id,
+    deliveryNumber,
+    customerId: order.customerId || subscription.customerId,
+    customerName: order.customerName || subscription.customerName,
+    customerMobile: order.customerMobile || subscription.customerMobile,
+    salableProductId: item?.salableProductId || item?.productId || subscription.productId,
+    productId: item?.productId || subscription.productId,
+    productName: item?.productName || subscription.productName,
+    deliveryDate,
+    status,
+    deliveryAddress: order.deliveryAddress as Record<string, unknown> | undefined,
+    updatedAt: serverTimestamp(),
+    lastUpdatedByUid: uid,
+    lastUpdatedByEmail: email ?? "",
+  };
+
+  if (existingSnap.exists()) {
+    transaction.update(deliveryRef, base);
+  } else {
+    transaction.set(deliveryRef, {
+      ...base,
+      createdAt: serverTimestamp(),
+    });
+    transaction.update(doc(db, "subscriptions", subscription.id), {
+      deliveriesGenerated: Math.max(numberValue(subscription.deliveriesGenerated), deliveryNumber),
+      nextDeliveryDate: nextSubscriptionDeliveryDate(subscription, deliveryDate, deliveryNumber),
+      updatedAt: serverTimestamp(),
+    });
   }
 
-  const productIds = [...new Set(cleanLines.flatMap(line =>
-    (selectedById.get(line.salableProductId)?.components ?? []).map(c => c.productId)
-  ))];
-  const salableIds = [...new Set(cleanLines.map(line => line.salableProductId))];
+  return deliveryId;
+}
 
-  await runTransaction(db, async tx => {
-    const productRefs = productIds.map(id => doc(db, "products", id));
-    const salableRefs = salableIds.map(id => doc(db, "salesProducts", id));
-    const [productSnaps, salableSnaps] = await Promise.all([
-      Promise.all(productRefs.map(ref => tx.get(ref))),
-      Promise.all(salableRefs.map(ref => tx.get(ref))),
-    ]);
+/**
+ * Pack one customer order against freshly harvested Microgreen quantities.
+ * No persistent Salable Product packed stock is created or updated.
+ */
+export async function packOrderFulfilment(
+  orderId: string,
+  lines: FulfilmentPackLine[],
+  uid: string,
+  email?: string,
+) {
+  if (!lines.length) throw new Error("Add at least one packing line.");
 
-    if (productSnaps.some(s => !s.exists())) throw new Error("One or more production products no longer exist. Refresh and retry.");
-    if (salableSnaps.some(s => !s.exists())) throw new Error("One or more Salable Products no longer exist. Refresh and retry.");
+  let createdFulfilmentId = "";
+  let packedCompletely = false;
+  let subscriptionDeliveryId: string | null = null;
 
-    const productsById = new Map(productSnaps.map((snap, i) => [productIds[i], {
-      ref: productRefs[i],
-      product: { id: productIds[i], ...(snap.data() as Omit<Product, "id">) } as Product,
-    }]));
-    const currentSalables = new Map(salableSnaps.map((snap, i) => [salableIds[i], {
-      ref: salableRefs[i],
-      product: { id: salableIds[i], ...(snap.data() as Omit<SalesProduct, "id">) } as SalesProduct,
-    }]));
+  // Firestore Web SDK transactions accept DocumentReferences, not Query objects.
+  // Load the collection-based configuration outside the transaction, then read
+  // the actual documents that will be updated inside the transaction.
+  const [salesSnap, packagingSnap, batchesSnap] = await Promise.all([
+    getDocs(collection(db, "salesProducts")),
+    getDocs(query(collection(db, "packagingMaster"), where("active", "==", true))),
+    getDocs(collection(db, "growingBatches")),
+  ]);
 
-    // Revalidate against the current Firestore state, not stale UI data.
-    for (const line of cleanLines) {
-      const current = currentSalables.get(line.salableProductId);
-      if (!current) throw new Error("A selected Salable Product is missing. Refresh and retry.");
-      validatePackingLine(line, current.product);
+  await runTransaction(db, async transaction => {
+    const orderRef = doc(db, "orders", orderId);
+    const orderSnap = await transaction.get(orderRef);
+    if (!orderSnap.exists()) throw new Error("Order no longer exists. Refresh and retry.");
+    const currentOrder = { id: orderSnap.id, ...(orderSnap.data() as Omit<Order, "id">) } as Order;
+
+    if (!orderStatusCanBePacked(currentOrder.status)) {
+      throw new Error(`Order ${currentOrder.orderNumber || orderId} cannot be packed from status ${currentOrder.status}.`);
+    }
+    if (currentOrder.packingStatus === "packed" || currentOrder.status === "packed") {
+      throw new Error("This order is already fully packed.");
     }
 
+    const subscriptionSnap = currentOrder.orderType === "subscription" && currentOrder.sourceSubscriptionId
+      ? await transaction.get(doc(db, "subscriptions", currentOrder.sourceSubscriptionId))
+      : null;
+
+    const salesProducts = new Map<string, SalesProduct>();
+    salesSnap.docs.forEach(snap => salesProducts.set(snap.id, { id: snap.id, ...(snap.data() as Omit<SalesProduct, "id">) }));
+    const packagingSizes = new Set(packagingSnap.docs.map(snap => Math.round(numberValue(snap.data().size))));
+    const batchRefs = batchesSnap.docs.map(snap => doc(db, "growingBatches", snap.id));
+    const batchSnaps = await Promise.all(batchRefs.map(ref => transaction.get(ref)));
+    const batches = batchSnaps.map(snap => ({ id: snap.id, ...(snap.data() as Omit<GrowingBatch, "id">) })) as GrowingBatch[];
+
+    if (currentOrder.orderType === "subscription" && currentOrder.sourceSubscriptionId && !subscriptionSnap?.exists()) {
+      throw new Error("Source subscription not found.");
+    }
+
+    const cleanLines = lines.map(line => ({
+      orderItemIndex: Math.round(Number(line.orderItemIndex)),
+      boxGrams: Math.round(Number(line.boxGrams)),
+      boxesPacked: Math.round(Number(line.boxesPacked)),
+    }));
+    const seen = new Set<number>();
+    for (const line of cleanLines) {
+      if (seen.has(line.orderItemIndex)) throw new Error("Each order item can appear only once in the packing worksheet.");
+      seen.add(line.orderItemIndex);
+      if (!Number.isInteger(line.boxGrams) || line.boxGrams <= 0 || !packagingSizes.has(line.boxGrams)) {
+        throw new Error(`Packaging ${line.boxGrams}g is not an active Packaging Master size.`);
+      }
+      if (!Number.isInteger(line.boxesPacked) || line.boxesPacked <= 0) {
+        throw new Error("Packed box quantity must be a positive whole number.");
+      }
+    }
+
+    const updatedItems = [...(currentOrder.items ?? [])];
+    const fulfilmentItems: PackingItem[] = [];
     const requiredByProduct = new Map<string, number>();
+
     for (const line of cleanLines) {
-      const salable = currentSalables.get(line.salableProductId)!.product;
-      for (const component of salable.components) {
-        const grams = Number(component.quantityGrams) * line.quantityPacked;
-        requiredByProduct.set(component.productId, (requiredByProduct.get(component.productId) ?? 0) + grams);
+      const item = updatedItems[line.orderItemIndex];
+      if (!item) throw new Error("One or more order items no longer exists. Refresh and retry.");
+      const salableId = item.salableProductId || item.productId;
+      const salable = salesProducts.get(salableId);
+      if (!salable) throw new Error(`Product for order item ${line.orderItemIndex + 1} no longer exists.`);
+
+      const requiredGrams = requiredItemGrams(item);
+      const alreadyPacked = Math.max(0, Math.round(numberValue(item.packedGrams)));
+      const remainingGrams = Math.max(0, requiredGrams - alreadyPacked);
+      const packedGrams = line.boxGrams * line.boxesPacked;
+      if (packedGrams > remainingGrams) {
+        throw new Error(`${salable.name}: ${packedGrams.toLocaleString()} gms is more than the remaining ${remainingGrams.toLocaleString()} gms.`);
+      }
+
+      const components = componentGramsPerBox(salable, line.boxGrams);
+      const totalComponentGrams = components.reduce((sum, component) => sum + component.quantityGrams, 0);
+      if (totalComponentGrams !== line.boxGrams) {
+        throw new Error(`${salable.name}: component grams do not match the selected box size.`);
+      }
+
+      components.forEach(component => {
+        const required = component.quantityGrams * line.boxesPacked;
+        requiredByProduct.set(component.productId, (requiredByProduct.get(component.productId) ?? 0) + required);
+      });
+
+      const previousPacked = alreadyPacked;
+      const nextPacked = previousPacked + packedGrams;
+      updatedItems[line.orderItemIndex] = {
+        ...item,
+        packedGrams: nextPacked,
+        packedBoxes: Math.max(0, Math.round(numberValue(item.packedBoxes))) + line.boxesPacked,
+      };
+      fulfilmentItems.push({
+        orderItemIndex: line.orderItemIndex,
+        salableProductId: salable.id,
+        salableProductName: salable.name,
+        boxGrams: line.boxGrams,
+        boxesPacked: line.boxesPacked,
+        requestedGrams: requiredGrams,
+        previousPackedGrams: previousPacked,
+        packedGrams,
+        components: components.map(component => ({
+          productId: component.productId,
+          productName: component.productName,
+          quantityGramsPerBox: component.quantityGrams,
+          totalGrams: component.quantityGrams * line.boxesPacked,
+        })),
+      });
+    }
+
+    const allOrderItemsPacked = updatedItems.every(item => {
+      const required = requiredItemGrams(item);
+      return required <= 0 || Math.max(0, Math.round(numberValue(item.packedGrams))) >= required;
+    });
+    packedCompletely = allOrderItemsPacked;
+
+    const productIds = [...requiredByProduct.keys()];
+    const productRefs = productIds.map(id => doc(db, "products", id));
+    const productSnaps = await Promise.all(productRefs.map(ref => transaction.get(ref)));
+    const productStates = new Map(productIds.map((id, index) => {
+      const snap = productSnaps[index];
+      if (!snap.exists()) throw new Error("One or more Microgreens no longer exist.");
+      const product = { id, ...(snap.data() as Omit<Product, "id">) } as Product;
+      return [id, { ref: productRefs[index], product, stock: Math.max(0, numberValue(product.stockGrams ?? product.stock)) }] as const;
+    }));
+
+    for (const [productId, required] of requiredByProduct) {
+      const state = productStates.get(productId);
+      if (!state) throw new Error("A required Microgreen is missing.");
+      if (state.stock < required) {
+        throw new Error(`${state.product.name}: ${state.stock.toLocaleString()} gms aggregate stock available, ${required.toLocaleString()} gms required.`);
       }
     }
 
-    const stockStates = [...requiredByProduct.entries()].map(([productId, required]) => {
-      const state = productsById.get(productId);
-      if (!state) throw new Error("A production product required by the packing worksheet is missing.");
-      const available = Number(state.product.stockGrams ?? state.product.stock ?? 0);
-      if (available < required) {
-        throw new Error(`${state.product.name}: ${available.toLocaleString()} gms available, ${required.toLocaleString()} gms required. Nothing was packed.`);
-      }
-      return { productId, ...state, available, required };
-    });
+    const batchWorking = batches
+      .filter(batch => batch.status === "completed_harvested" && !batch.delivered)
+      .sort((a, b) => String(a.harvestDate || a.createdAt || "").localeCompare(String(b.harvestDate || b.createdAt || "")))
+      .map(batch => ({
+        batch,
+        items: (batch.items ?? []).map(item => ({
+          item,
+          available: Math.max(0, Math.round(numberValue(item.batchStockGrams !== undefined ? item.batchStockGrams : item.actualYieldGrams))),
+        })),
+      }));
 
-    // All validations and stock checks are complete. Only now perform writes.
-    for (const state of stockStates) {
-      const nextStock = state.available - state.required;
-      tx.update(state.ref, {
+    const allocations: FulfilmentAllocation[] = [];
+    const batchItemUpdates = new Map<string, GrowingBatch["items"]>();
+
+    for (const [productId, required] of requiredByProduct) {
+      let remaining = required;
+      for (const batchState of batchWorking) {
+        if (remaining <= 0) break;
+        const matching = batchState.items.find(entry => entry.item.productId === productId && entry.item.status === "completed_harvested" && entry.available > 0);
+        if (!matching) continue;
+        const take = Math.min(remaining, matching.available);
+        matching.available -= take;
+        remaining -= take;
+        const existingItems = batchItemUpdates.get(batchState.batch.id) ?? [...(batchState.batch.items ?? [])];
+        const index = existingItems.findIndex(item => item.id === matching.item.id);
+        if (index >= 0) {
+          existingItems[index] = { ...existingItems[index], batchStockGrams: matching.available };
+          batchItemUpdates.set(batchState.batch.id, existingItems);
+        }
+        allocations.push({
+          growingBatchId: batchState.batch.id,
+          growingBatchNumber: batchState.batch.batchNumber,
+          growingBatchItemId: matching.item.id,
+          productId,
+          productName: matching.item.productName,
+          quantityGrams: take,
+        });
+      }
+      if (remaining > 0) {
+        throw new Error(`Insufficient harvested batch quantity for ${productStates.get(productId)?.product.name || productId}. Remaining requirement: ${remaining.toLocaleString()} gms.`);
+      }
+    }
+
+    if (currentOrder.orderType === "subscription" && currentOrder.sourceSubscriptionId && subscriptionSnap?.exists()) {
+      const subscription = { id: subscriptionSnap.id, ...(subscriptionSnap.data() as Omit<Subscription, "id">) } as Subscription;
+      subscriptionDeliveryId = await createOrUpdateSubscriptionDeliveryInTransaction(
+        transaction,
+        currentOrder,
+        subscription,
+        packedCompletely,
+        uid,
+        email,
+      );
+    }
+
+    for (const state of productStates.values()) {
+      const required = requiredByProduct.get(state.product.id) ?? 0;
+      if (!required) continue;
+      const nextStock = state.stock - required;
+      transaction.update(state.ref, {
         stockGrams: nextStock,
         stock: nextStock,
         updatedAt: serverTimestamp(),
       });
       const adjustmentRef = doc(collection(db, "inventoryAdjustments"));
-      tx.set(adjustmentRef, {
-        productId: state.productId,
+      transaction.set(adjustmentRef, {
+        productId: state.product.id,
         productName: state.product.name,
-        type: "packaging",
-        quantity: state.required,
-        previousStock: state.available,
+        type: "fulfilment",
+        quantity: required,
+        unit: "g",
+        previousStock: state.stock,
         newStock: nextStock,
-        reason: `Manual packing worksheet: ${cleanLines.length} line(s)`,
-        salableProductIds: salableIds,
+        reason: `Fulfilment packing for ${currentOrder.orderNumber || currentOrder.id}`,
+        orderId: currentOrder.id,
         createdByUid: uid,
         createdByEmail: email ?? "",
         createdAt: serverTimestamp(),
       });
     }
 
-    for (const line of cleanLines) {
-      const current = currentSalables.get(line.salableProductId)!;
-      const currentPacked = Number(current.product.packedStockQuantity ?? 0);
-      tx.update(current.ref, {
-        packedStockQuantity: currentPacked + line.quantityPacked,
-        updatedAt: serverTimestamp(),
-      });
-
-      const items: PackingItem[] = current.product.components.map(component => ({
-        productId: component.productId,
-        productName: component.productName,
-        quantityGrams: Number(component.quantityGrams),
-        totalGrams: Number(component.quantityGrams) * line.quantityPacked,
-      }));
-      const totalGramsConsumed = items.reduce((sum, item) => sum + item.totalGrams, 0);
-      const fulfilmentRef = doc(collection(db, "fulfilments"));
-      tx.set(fulfilmentRef, {
-        salableProductId: current.product.id,
-        salableProductName: current.product.name,
-        salableProductSku: current.product.sku ?? "",
-        boxGrams: line.boxGrams,
-        quantityPacked: line.quantityPacked,
-        items,
-        totalGramsConsumed,
+    const orderPatch: Record<string, unknown> = {
+      items: updatedItems,
+      packingStatus: packedCompletely ? "packed" : "partial",
+      updatedAt: serverTimestamp(),
+    };
+    if (packedCompletely) {
+      orderPatch.status = "packed";
+      orderPatch.packedAt = serverTimestamp();
+      orderPatch.packedByUid = uid;
+      orderPatch.packedByEmail = email ?? "";
+      orderPatch.statusHistory = arrayUnion({
         status: "packed",
-        packedAt: serverTimestamp(),
-        packedByUid: uid,
-        packedByEmail: email ?? "",
-        createdAt: serverTimestamp(),
+        changedByUid: uid,
+        changedByEmail: email ?? "",
+        note: "Order packed through Fulfilment.",
+        changedAt: new Date(),
+      });
+    }
+    transaction.update(orderRef, orderPatch);
+
+    for (const [batchId, items] of batchItemUpdates) {
+      transaction.update(doc(db, "growingBatches", batchId), {
+        items,
         updatedAt: serverTimestamp(),
       });
     }
+
+    const fulfilmentRef = doc(collection(db, "fulfilments"));
+    createdFulfilmentId = fulfilmentRef.id;
+    transaction.set(fulfilmentRef, {
+      fulfilmentType: currentOrder.orderType === "subscription" ? "SUBSCRIPTION" : "ORDER",
+      orderId: currentOrder.id,
+      orderNumber: currentOrder.orderNumber || currentOrder.id,
+      subscriptionDeliveryId,
+      sourceSubscriptionId: currentOrder.sourceSubscriptionId || null,
+      customerId: currentOrder.customerId,
+      customerName: currentOrder.customerName || "",
+      scheduledDeliveryDate: currentOrder.scheduledDeliveryDate || "",
+      items: fulfilmentItems,
+      allocations,
+      totalGramsConsumed: allocations.reduce((sum, item) => sum + item.quantityGrams, 0),
+      status: packedCompletely ? "packed" : "partially_packed",
+      packedAt: serverTimestamp(),
+      packedByUid: uid,
+      packedByEmail: email ?? "",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
   });
-  await auditEvent("pack", "fulfilments", undefined, `Packed ${cleanLines.reduce((sum, line) => sum + line.quantityPacked, 0)} Salable Product unit(s) across ${cleanLines.length} worksheet line(s)`);
+
+  await auditEvent("pack", "fulfilments", createdFulfilmentId, `${packedCompletely ? "Packed" : "Partially packed"} order ${orderId}${subscriptionDeliveryId ? ` / subscription delivery ${subscriptionDeliveryId}` : ""}`);
+  return { fulfilmentId: createdFulfilmentId, packedCompletely, subscriptionDeliveryId };
 }
 
-/** Compatibility wrapper for older callers. New packaging uses the worksheet API above. */
-export async function packSalableProduct(
-  salableProduct: SalesProduct,
-  quantityPacked: number,
-  uid: string,
-  email?: string,
-) {
-  const boxGrams = salableProduct.components.reduce((sum, c) => sum + Number(c.quantityGrams), 0);
-  return packSalableProducts([{ salableProductId: salableProduct.id, boxGrams, quantityPacked }], [salableProduct], uid, email);
+/** Backward-compatible aliases are intentionally no longer used by the Fulfilment UI. */
+export async function listManualFulfilments() {
+  const snapshot = await getDocs(query(collection(db, "fulfilments"), orderBy("createdAt", "desc")));
+  return snapshot.docs.map(item => ({ id: item.id, ...(item.data() as Omit<Fulfilment, "id">) })) as Fulfilment[];
 }
 
-/** Kept as compatibility exports; Phase C remains manual and order-independent. */
-export async function ensureFulfilmentForOrder() { return false; }
-export async function generateDueSubscriptionOrders() { return []; }
-export async function packOrder() { throw new Error("Order-based packing is not part of Phase C. Use manual Salable Product packing."); }
+export async function packSalableProducts() {
+  throw new Error("Manual Salable Product packing has been replaced by order-based Fulfilment.");
+}

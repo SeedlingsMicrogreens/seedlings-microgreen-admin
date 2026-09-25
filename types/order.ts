@@ -3,6 +3,7 @@ export const ORDER_STATUSES = [
   "paid",
   "confirmed",
   "preparing",
+  "packed",
   "ready_for_handover",
   "handed_to_delivery",
   "out_for_delivery",
@@ -31,6 +32,9 @@ export type OrderItem = {
   sellingOptionId?: string;
   sellingOptionLabel?: string;
   weightGrams?: number;
+  /** Fulfilment progress for this order item. */
+  packedGrams?: number;
+  packedBoxes?: number;
 };
 
 export type OrderAddress = {
@@ -96,7 +100,7 @@ export type Order = {
   subscriptionPlanId?: string;
   subscriptionPlanName?: string;
   subscriptionPlanFrequency?: string;
-  packingStatus?: "pending" | "packed";
+  packingStatus?: "pending" | "partial" | "packed";
   packedAt?: unknown;
   packedByUid?: string;
   packedByEmail?: string;
@@ -127,8 +131,9 @@ export function canTransitionOrderStatus(from: OrderStatus, to: OrderStatus) {
   const transitions: Record<OrderStatus, OrderStatus[]> = {
     pending_payment: ["paid", "cancelled"],
     paid: ["confirmed", "cancelled"],
-    confirmed: ["preparing", "cancelled"],
-    preparing: ["ready_for_handover", "cancelled"],
+    confirmed: ["preparing", "packed", "cancelled"],
+    preparing: ["packed", "cancelled"],
+    packed: ["ready_for_handover", "handed_to_delivery", "out_for_delivery", "cancelled"],
     ready_for_handover: ["handed_to_delivery", "cancelled"],
     handed_to_delivery: ["out_for_delivery", "cancelled"],
     out_for_delivery: ["delivered", "cancelled"],

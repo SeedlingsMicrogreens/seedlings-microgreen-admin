@@ -50,6 +50,7 @@ export type GrowingBatchItem = {
 
   status: GrowingBatchItemStatus;
   notes?: string;
+  /** Remaining grams available from this harvested batch item for fulfilment. */
   batchStockGrams?: number;
 };
 

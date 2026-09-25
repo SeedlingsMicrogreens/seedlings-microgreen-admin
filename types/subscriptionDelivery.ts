@@ -1,4 +1,6 @@
 export const SUBSCRIPTION_DELIVERY_STATUSES = [
+  "pending",
+  "packed",
   "assigned",
   "out_for_delivery",
   "delivered",
