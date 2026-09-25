@@ -1,4 +1,4 @@
-import { collection, doc, runTransaction, serverTimestamp, type Transaction } from "firebase/firestore";
+import { collection, doc, getDocs, query, runTransaction, serverTimestamp, where, type Transaction } from "firebase/firestore";
 import { db } from "./firebase";
 import { auditEvent } from "./firestore";
 import { addWeeks } from "./subscriptionService";
@@ -14,6 +14,151 @@ function nextDeliveryDate(subscription: Subscription, deliveryDate: string, deli
   const total = Number(subscription.totalDeliveries || 0);
   if (total > 0 && deliveryNumber >= total) return "";
   return addWeeks(deliveryDate, 1);
+}
+
+export async function addNextSubscriptionDeliveryForFulfilment(
+  subscriptionId: string,
+  uid: string,
+  email?: string,
+) {
+  const deliveriesSnapshot = await getDocs(query(
+    collection(db, "subscriptionDeliveries"),
+    where("subscriptionId", "==", subscriptionId),
+  ));
+
+  const deliveredNumbers = deliveriesSnapshot.docs
+    .map(snapshot => snapshot.data())
+    .filter(data => data.status === "delivered")
+    .map(data => Math.max(0, Math.round(Number(data.deliveryNumber || 0))))
+    .filter(number => number > 0);
+  const completedDeliveries = deliveredNumbers.length;
+
+  let createdOrderId = "";
+  let createdDeliveryId = "";
+  let alreadyExists = false;
+
+  await runTransaction(db, async transaction => {
+    const subscriptionRef = doc(db, "subscriptions", subscriptionId);
+    const subscriptionSnap = await transaction.get(subscriptionRef);
+    if (!subscriptionSnap.exists()) throw new Error("Subscription not found.");
+
+    const subscription = { id: subscriptionSnap.id, ...(subscriptionSnap.data() as Omit<Subscription, "id">) } as Subscription;
+    if (subscription.status !== "active") throw new Error("Only active subscriptions can receive another delivery.");
+
+    const totalDeliveries = Math.max(0, Math.round(Number(subscription.totalDeliveries || 0)));
+    if (totalDeliveries > 0 && completedDeliveries >= totalDeliveries) {
+      transaction.update(subscriptionRef, {
+        completedDeliveries: totalDeliveries,
+        status: "completed",
+        updatedAt: serverTimestamp(),
+      });
+      return;
+    }
+
+    const nextDeliveryNumber = completedDeliveries + 1;
+    const deliveryId = `${subscription.id}_${nextDeliveryNumber}`;
+    const deliveryRef = doc(db, "subscriptionDeliveries", deliveryId);
+    const existingDeliverySnap = await transaction.get(deliveryRef);
+    if (existingDeliverySnap.exists()) {
+      alreadyExists = true;
+      return;
+    }
+
+    const deliveryDate = subscription.nextDeliveryDate;
+    if (!deliveryDate) throw new Error("Next delivery date is not available for this subscription.");
+
+    const orderRef = doc(collection(db, "orders"));
+    const orderNumber = `ORD-${orderRef.id.slice(0, 8).toUpperCase()}`;
+    const lineTotal = Number(subscription.unitPrice || 0) * Math.max(1, Number(subscription.quantity || 1));
+    const item = {
+      salableProductId: subscription.productId,
+      productId: subscription.productId,
+      productName: subscription.productName,
+      quantity: Math.max(1, Math.round(Number(subscription.quantity || 1))),
+      unitPrice: Number(subscription.unitPrice || 0),
+      lineTotal,
+      sellingOptionId: subscription.sellingOptionId,
+      sellingOptionLabel: subscription.sellingOptionLabel,
+      weightGrams: Number(subscription.weightGrams || 0),
+      packedGrams: 0,
+      packedBoxes: 0,
+    };
+
+    transaction.set(orderRef, {
+      orderNumber,
+      customerId: subscription.customerId,
+      customerName: subscription.customerName || "",
+      customerMobile: subscription.customerMobile || "",
+      items: [item],
+      subtotal: lineTotal,
+      deliveryFee: 0,
+      discount: 0,
+      total: lineTotal,
+      currency: "INR",
+      paymentStatus: "paid",
+      paymentMethod: "subscription",
+      paymentDate: serverTimestamp(),
+      paidAmount: lineTotal,
+      status: "confirmed",
+      deliveryAddress: subscription.deliveryAddress || {},
+      scheduledDeliveryDate: deliveryDate,
+      sourceSubscriptionId: subscription.id,
+      sourceSubscriptionDeliveryNumber: nextDeliveryNumber,
+      orderType: "subscription",
+      subscriptionPlanId: "",
+      subscriptionPlanName: "",
+      subscriptionPlanFrequency: subscription.frequency,
+      packingStatus: "pending",
+      statusHistory: [{
+        status: "confirmed",
+        changedByUid: uid,
+        changedByEmail: email || "",
+        note: `Subscription delivery ${nextDeliveryNumber} added for fulfilment.`,
+        changedAt: new Date(),
+      }],
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    transaction.set(deliveryRef, {
+      subscriptionId: subscription.id,
+      orderId: orderRef.id,
+      orderNumber,
+      deliveryNumber: nextDeliveryNumber,
+      customerId: subscription.customerId,
+      customerName: subscription.customerName || "",
+      customerMobile: subscription.customerMobile || "",
+      salableProductId: subscription.productId,
+      productId: subscription.productId,
+      productName: subscription.productName,
+      deliveryDate,
+      status: "pending",
+      deliveryAddress: subscription.deliveryAddress || {},
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      lastUpdatedByUid: uid,
+      lastUpdatedByEmail: email || "",
+    });
+
+    const nextDate = nextDeliveryDate(subscription, deliveryDate, nextDeliveryNumber);
+    transaction.update(subscriptionRef, {
+      deliveriesGenerated: Math.max(Number(subscription.deliveriesGenerated || 0), nextDeliveryNumber),
+      completedDeliveries,
+      nextDeliveryDate: nextDate,
+      updatedAt: serverTimestamp(),
+      lastUpdatedByUid: uid,
+      lastUpdatedByEmail: email || "",
+    });
+
+    createdOrderId = orderRef.id;
+    createdDeliveryId = deliveryId;
+  });
+
+  if (alreadyExists) return { created: false, orderId: "", deliveryId: "", completedDeliveries };
+  if (createdDeliveryId) {
+    await auditEvent("create", "subscriptionDeliveries", createdDeliveryId, `Added subscription delivery ${createdDeliveryId} to fulfilment.`);
+  }
+  return { created: true, orderId: createdOrderId, deliveryId: createdDeliveryId, completedDeliveries };
 }
 
 export async function createSubscriptionDeliveryAtHandoverInTransaction(
@@ -130,10 +275,19 @@ export async function updateSubscriptionDeliveryStatusInTransaction(
   if (status === "failed") patch.failedAt = serverTimestamp();
   if (status === "cancelled") patch.cancelledAt = serverTimestamp();
   transaction.update(deliveryRef, patch);
+
+  const totalDeliveries = Math.max(0, Math.round(Number(subscription.totalDeliveries || 0)));
+  const completedDeliveries = status === "delivered"
+    ? Math.max(Math.round(Number(subscription.completedDeliveries || 0)), deliveryNumber)
+    : Math.round(Number(subscription.completedDeliveries || 0));
+  const subscriptionCompleted = status === "delivered" && totalDeliveries > 0 && completedDeliveries >= totalDeliveries;
+
   transaction.update(subscriptionRef, {
     lastDeliveryId: deliveryId,
     lastDeliveryNumber: deliveryNumber,
     lastDeliveryStatus: status,
+    completedDeliveries,
+    ...(subscriptionCompleted ? { status: "completed" } : {}),
     updatedAt: serverTimestamp(),
   });
   return deliveryId;

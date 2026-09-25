@@ -35,6 +35,7 @@ export type Subscription = {
   frequency: SubscriptionFrequency;
   totalDeliveries: number;
   deliveriesGenerated: number;
+  completedDeliveries?: number;
   nextDeliveryDate: string;
   deliveryDay: number; // 0 = Sunday ... 6 = Saturday; Phase 1 default = 6
   startDate: string;

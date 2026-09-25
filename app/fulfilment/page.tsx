@@ -5,12 +5,14 @@ import { AdminPage } from "@/components/admin/AdminPage";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { listCollection } from "@/lib/firestore";
 import { listManualFulfilments, packOrderFulfilment } from "@/lib/fulfilmentService";
+import { addNextSubscriptionDeliveryForFulfilment } from "@/lib/subscriptionDeliveryService";
 import { packagingDisplay } from "@/types/packaging";
 import type { Packaging } from "@/types/packaging";
 import type { SalesProduct } from "@/types/salesProduct";
 import type { Fulfilment, FulfilmentPackLine } from "@/types/fulfilment";
 import type { Order, OrderItem } from "@/types/order";
 import type { SubscriptionDelivery } from "@/types/subscriptionDelivery";
+import type { Subscription } from "@/types/subscription";
 
 function numberValue(value: unknown) {
   const n = Number(value ?? 0);
@@ -74,6 +76,8 @@ export default function FulfilmentPage() {
   const [packaging, setPackaging] = useState<Packaging[]>([]);
   const [history, setHistory] = useState<Fulfilment[]>([]);
   const [subscriptionDeliveries, setSubscriptionDeliveries] = useState<SubscriptionDelivery[]>([]);
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [addingSubscriptionId, setAddingSubscriptionId] = useState("");
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [drafts, setDrafts] = useState<PackDraft[]>([]);
   const [showHistory, setShowHistory] = useState(false);
@@ -85,18 +89,20 @@ export default function FulfilmentPage() {
   async function load() {
     setLoading(true);
     try {
-      const [orderData, salesData, packagingData, fulfilmentData, subscriptionDeliveryData] = await Promise.all([
+      const [orderData, salesData, packagingData, fulfilmentData, subscriptionDeliveryData, subscriptionData] = await Promise.all([
         listCollection<Order>("orders", "createdAt"),
         listCollection<SalesProduct>("salesProducts"),
         listCollection<Packaging>("packagingMaster", "size"),
         listManualFulfilments(),
         listCollection<SubscriptionDelivery>("subscriptionDeliveries", "deliveryDate"),
+        listCollection<Subscription>("subscriptions", "createdAt"),
       ]);
       setOrders(orderData);
       setSalableProducts(salesData);
       setPackaging(packagingData.filter(x => x.active && Number(x.size) > 0).sort((a, b) => Number(b.size) - Number(a.size)));
       setHistory(fulfilmentData);
       setSubscriptionDeliveries(subscriptionDeliveryData);
+      setSubscriptions(subscriptionData);
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load fulfilment data.");
@@ -114,6 +120,41 @@ export default function FulfilmentPage() {
     () => new Map(subscriptionDeliveries.map(delivery => [delivery.id, delivery])),
     [subscriptionDeliveries],
   );
+
+  const activeSubscriptions = useMemo(() => subscriptions
+    .filter(subscription => subscription.status === "active")
+    .map(subscription => {
+      const deliveries = subscriptionDeliveries.filter(delivery => delivery.subscriptionId === subscription.id);
+      const completed = Math.max(
+        Math.round(numberValue(subscription.completedDeliveries || 0)),
+        deliveries.filter(delivery => delivery.status === "delivered").length,
+      );
+      const total = Math.max(0, Math.round(numberValue(subscription.totalDeliveries || 0)));
+      const nextNumber = completed + 1;
+      const existingNext = deliveries.find(delivery => delivery.deliveryNumber === nextNumber);
+      return { subscription, completed, total, nextNumber, existingNext };
+    })
+    .filter(row => row.total === 0 || row.completed < row.total),
+    [subscriptions, subscriptionDeliveries],
+  );
+
+  async function addSubscriptionDelivery(subscription: Subscription) {
+    if (!user) return;
+    setAddingSubscriptionId(subscription.id);
+    setError("");
+    setMessage("");
+    try {
+      const result = await addNextSubscriptionDeliveryForFulfilment(subscription.id, user.uid, user.email ?? undefined);
+      setMessage(result.created
+        ? `Delivery ${result.deliveryId.split("_").pop()} added for ${subscription.subscriptionNumber}. It is now available below for packing.`
+        : `The next delivery for ${subscription.subscriptionNumber} is already available below.`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to add subscription delivery.");
+    } finally {
+      setAddingSubscriptionId("");
+    }
+  }
 
   // Fulfilment records stay in Firestore permanently. Only the active history
   // view is cleared once the linked order/delivery reaches Delivered.
@@ -214,6 +255,34 @@ export default function FulfilmentPage() {
 
         {message && <div className="alert alert-success">{message}</div>}
         {error && <div className="alert alert-danger">{error}</div>}
+
+        <div className="card border-0 shadow-sm mb-4">
+          <div className="card-header d-flex justify-content-between align-items-center">
+            <div>
+              <strong>Active Subscriptions</strong>
+              <div className="small text-muted">Completed deliveries are tracked against the agreed total. Add the next delivery here only when it is not already below.</div>
+            </div>
+            <span className="badge text-bg-info">{activeSubscriptions.length} active</span>
+          </div>
+          <div className="table-responsive">
+            <table className="table table-hover align-middle mb-0">
+              <thead><tr><th>Subscription</th><th>Customer</th><th>Product / Pack</th><th>Completed</th><th>Next Delivery</th><th className="text-end">Action</th></tr></thead>
+              <tbody>
+                {activeSubscriptions.map(({ subscription, completed, total, nextNumber, existingNext }) => <tr key={subscription.id}>
+                  <td><strong>{subscription.subscriptionNumber}</strong></td>
+                  <td>{subscription.customerName || subscription.customerMobile || subscription.customerId}</td>
+                  <td>{subscription.productName}<div className="small text-muted">{subscription.sellingOptionLabel} × {subscription.quantity}</div></td>
+                  <td><strong>{completed}</strong> / {total || "ongoing"}</td>
+                  <td>{existingNext?.deliveryDate || subscription.nextDeliveryDate || "—"}<div className="small text-muted">Delivery #{nextNumber}</div></td>
+                  <td className="text-end">
+                    {existingNext ? <span className="badge text-bg-secondary">Already in packing</span> : <button className="btn btn-sm btn-outline-primary" disabled={addingSubscriptionId === subscription.id} onClick={() => void addSubscriptionDelivery(subscription)}>{addingSubscriptionId === subscription.id ? <><span className="spinner-border spinner-border-sm me-1" />Adding...</> : <><i className="bi bi-plus-lg me-1" />Add Delivery</>}</button>}
+                  </td>
+                </tr>)}
+                {!activeSubscriptions.length && !loading && <tr><td colSpan={6} className="text-center text-muted py-4">No active subscriptions waiting for another delivery.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
 
         <div className="card border-0 shadow-sm mb-4">
           <div className="card-header d-flex justify-content-between align-items-center">
