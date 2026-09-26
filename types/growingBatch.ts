@@ -15,7 +15,12 @@ export type GrowingBatchPhaseStatus = (typeof GROWING_BATCH_PHASE_STATUSES)[numb
 
 export type GrowingBatchPhase = {
   status: GrowingBatchPhaseStatus;
+  /** Planned phase start date calculated from the batch harvest date. */
   date?: string;
+  /** Actual date/time captured when the phase is started. */
+  startedAt?: string;
+  /** Actual date/time captured when the phase is completed. */
+  endedAt?: string;
 };
 
 export type GrowingBatchItem = {

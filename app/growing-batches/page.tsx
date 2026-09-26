@@ -5,7 +5,9 @@ import { AdminPage } from "@/components/admin/AdminPage";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { listCollection } from "@/lib/firestore";
 import {
-  advanceGrowingBatchItemPhase,
+  completeGrowingBatchItemPhase,
+  harvestGrowingBatch,
+  startGrowingBatchItemPhase,
   buildBatchItem,
   calculateGrowingPhaseDates,
   createGrowingBatch,
@@ -21,7 +23,11 @@ import type { SalesProduct } from "@/types/salesProduct";
 import type { Subscription } from "@/types/subscription";
 
 function today() { return new Date().toISOString().slice(0, 10); }
-function formatDate(v?: string) { return v ? new Date(`${v}T00:00:00`).toLocaleDateString() : "—"; }
+function formatDate(v?: string) {
+  if (!v) return "—";
+  const d = new Date(`${v}T00:00:00`);
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
 function statusLabel(v: string) {
   return v.replaceAll("_", " ").replace(/\b\w/g, c => c.toUpperCase());
 }
@@ -282,11 +288,11 @@ function BatchList({ batches, loading, onView }: {
     </div>
     <div className="table-responsive"><table className="table table-hover align-middle mb-0">
       <thead><tr>
-        <th>Batch</th><th>Microgreens</th><th>Location</th><th>Harvest Date</th><th>Expected usable</th><th>Harvested</th><th>Status</th><th className="text-end">Action</th>
+        <th>Batch</th><th>Microgreens</th><th>Location</th><th>Harvest Date</th><th>Expected</th><th>Harvested</th><th>Status</th><th className="text-end">Action</th>
       </tr></thead>
       <tbody>
         {filtered.map(batch => {
-          const expected = batch.items.reduce((n, i) => n + i.expectedUsableYieldGrams, 0);
+          const expected = batch.items.reduce((n, i) => n + i.expectedYieldGrams, 0);
           const harvested = batch.items.reduce((n, i) => n + (i.actualYieldGrams ?? 0), 0);
           return <tr key={batch.id}>
             <td><strong>{batch.batchNumber}</strong></td>
@@ -387,7 +393,7 @@ function CreateBatch({
       <div className="card-body">
         <div className="row g-4">
           <div className="col-lg-8">
-            <div className="card border">
+            <div className="card border h-100">
               <div className="card-header"><strong>Growing Information</strong></div>
               <div className="card-body">
                 <div className="row g-3">
@@ -403,8 +409,34 @@ function CreateBatch({
                     </select>
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
 
-                <div className="d-flex justify-content-between align-items-center mt-4 mb-2">
+          <div className="col-lg-4">
+            <div className="card border h-100">
+              <div className="card-header"><strong>Production Summary</strong></div>
+              <div className="card-body">
+                <div className="small text-muted mb-2">Calculated from active one-time orders and subscription deliveries for {formatDate(harvestDate)}.</div>
+                {selectedProducts.length
+                  ? selectedProducts.map(row => <div className="border-bottom py-2" key={row.product.id}>
+                      <div className="d-flex justify-content-between"><strong>{row.product.name}</strong><span>{row.trays} trays</span></div>
+                      <div className="small text-muted">Required {row.required.toLocaleString()} gms · Planned { (row.trays * Number(row.product.expectedYieldGramsPerTray || 0)).toLocaleString()} gms</div>
+                    </div>)
+                  : <div className="text-muted">No trays selected.</div>}
+                <div className="pt-3"><strong>Start date</strong><div>{selectedProducts.length ? formatDate(selectedProducts.map(row => calculateGrowingPhaseDates(row.product, harvestDate).startDate).sort()[0]) : "—"}</div></div>
+              </div>
+            </div>
+          </div>
+
+          <div className="col-12">
+            <div className="card border">
+              <div className="card-header d-flex justify-content-between align-items-center">
+                <strong>Microgreens</strong>
+                <span className="small text-muted">100%</span>
+              </div>
+              <div className="card-body">
+                <div className="d-flex justify-content-between align-items-center mb-2">
                   <label className="form-label mb-0">Microgreens and trays *</label>
                   <span className="small text-muted">Trays are calculated from delivery demand; you can change them.</span>
                 </div>
@@ -432,22 +464,6 @@ function CreateBatch({
               </div>
             </div>
           </div>
-
-          <div className="col-lg-4">
-            <div className="card border">
-              <div className="card-header"><strong>Production Summary</strong></div>
-              <div className="card-body">
-                <div className="small text-muted mb-2">Calculated from active one-time orders and subscription deliveries for {formatDate(harvestDate)}.</div>
-                {selectedProducts.length
-                  ? selectedProducts.map(row => <div className="border-bottom py-2" key={row.product.id}>
-                      <div className="d-flex justify-content-between"><strong>{row.product.name}</strong><span>{row.trays} trays</span></div>
-                      <div className="small text-muted">Required {row.required.toLocaleString()} gms · Planned { (row.trays * Number(row.product.expectedYieldGramsPerTray || 0)).toLocaleString()} gms</div>
-                    </div>)
-                  : <div className="text-muted">No trays selected.</div>}
-                <div className="pt-3"><strong>Start date</strong><div>{selectedProducts.length ? formatDate(selectedProducts.map(row => calculateGrowingPhaseDates(row.product, harvestDate).startDate).sort()[0]) : "—"}</div></div>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
       <div className="card-footer d-flex justify-content-end gap-2">
@@ -458,12 +474,40 @@ function CreateBatch({
   </form>;
 }
 
-function PhaseCell({ phase }: { phase?: { status: GrowingBatchPhaseStatus; date?: string } }) {
+function phaseActualDate(value?: string) {
+  if (!value) return "";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? "" : formatDate(d.toISOString().slice(0, 10));
+}
+
+function PhaseCell({
+  phase,
+  canStart,
+  onStart,
+  onEnd,
+  disabled,
+}: {
+  phase?: { status: GrowingBatchPhaseStatus; date?: string; startedAt?: string; endedAt?: string };
+  canStart: boolean;
+  onStart: () => void;
+  onEnd: () => void;
+  disabled?: boolean;
+}) {
   const status = phase?.status ?? "not_started";
+  if (status === "na") return <div className="text-center"><span className="small text-muted">—</span></div>;
+
   return <div className="text-center">
     <div className="fw-semibold">{phaseStatusLabel(status)}</div>
-    <div className="small text-muted">{formatDate(phase?.date)}</div>
+    {status === "not_started" && <div className="small text-muted">Planned {formatDate(phase?.date)}</div>}
+    {status === "in_progress" && <div className="small text-muted">Start {phaseActualDate(phase?.startedAt)}</div>}
+    {status === "completed" && <div className="small text-muted">Start {phaseActualDate(phase?.startedAt)} · End {phaseActualDate(phase?.endedAt)}</div>}
     <span className={`rounded-circle d-inline-block mt-1 ${phaseCircleClass(status)}`} style={{ width: 12, height: 12 }} title={phaseStatusLabel(status)} />
+    {status === "not_started" && canStart && <div className="mt-1">
+      <button type="button" className="btn btn-sm btn-primary" disabled={disabled} onClick={onStart}>Start</button>
+    </div>}
+    {status === "in_progress" && <div className="mt-1">
+      <button type="button" className="btn btn-sm btn-success" disabled={disabled} onClick={onEnd}>End</button>
+    </div>}
   </div>;
 }
 
@@ -475,48 +519,75 @@ function BatchDetails({ batch, uid, email, onBack, onSaved, onError }: {
   onSaved: () => Promise<void>;
   onError: (x: string) => void;
 }) {
-  const [harvestItem, setHarvestItem] = useState<GrowingBatchItem | null>(null);
-  const [yieldGrams, setYieldGrams] = useState(0);
-  const [wastage, setWastage] = useState(0);
-  const [readyDate, setReadyDate] = useState(batch.harvestDate || today());
-  const [notes, setNotes] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [harvestValues, setHarvestValues] = useState<Record<string, number>>({});
+  const [harvesting, setHarvesting] = useState(false);
+  const [savingPhase, setSavingPhase] = useState<string | null>(null);
 
-  async function advance(item: GrowingBatchItem) {
+  const expected = batch.items.reduce((n, i) => n + i.expectedYieldGrams, 0);
+  const actual = batch.items.reduce((n, i) => n + (i.actualYieldGrams ?? 0), 0);
+  const allPhasesCompleted = batch.items.length > 0 && batch.items.every(item => {
+    const phases = item.phases;
+    return Boolean(phases) &&
+      (phases?.soaking?.status === "na" || phases?.soaking?.status === "completed") &&
+      phases?.darkPeriod?.status === "completed" &&
+      phases?.lightPeriod?.status === "completed";
+  });
+
+  function phaseCanStart(item: GrowingBatchItem, key: "soaking" | "darkPeriod" | "lightPeriod") {
+    const phase = item.phases?.[key];
+    if (!phase || phase.status !== "not_started") return false;
+    if (key === "soaking") return true;
+    if (key === "darkPeriod") return item.phases?.soaking?.status === "na" || item.phases?.soaking?.status === "completed";
+    return item.phases?.darkPeriod?.status === "completed";
+  }
+
+  async function updatePhase(item: GrowingBatchItem, key: "soaking" | "darkPeriod" | "lightPeriod", action: "start" | "end") {
     onError("");
-    setSaving(true);
+    setSavingPhase(`${item.id}:${key}`);
     try {
-      await advanceGrowingBatchItemPhase(batch, item.id, uid, email);
-      await showSuccess(`${item.productName} moved to the next phase.`);
+      if (action === "start") {
+        await startGrowingBatchItemPhase(batch, item.id, key, uid, email);
+        await showSuccess(`${item.productName}: ${key === "darkPeriod" ? "Dark Period" : key === "lightPeriod" ? "Light Period" : "Soaking"} started.`);
+      } else {
+        await completeGrowingBatchItemPhase(batch, item.id, key, uid, email);
+        await showSuccess(`${item.productName}: ${key === "darkPeriod" ? "Dark Period" : key === "lightPeriod" ? "Light Period" : "Soaking"} completed.`);
+      }
       await onSaved();
     } catch (err) {
       onError(err instanceof Error ? err.message : "Unable to update phase.");
     } finally {
-      setSaving(false);
+      setSavingPhase(null);
     }
   }
 
-  async function harvest(e: React.FormEvent) {
-    e.preventDefault();
+  function openHarvest() {
+    const values: Record<string, number> = {};
+    for (const item of batch.items) {
+      const expected = Number(item.expectedYieldGrams ?? 0);
+      const expectedLoss = Number(item.expectedLossGrams ?? 0);
+      // Expected is the planned quantity before loss. Pre-fill Actual Harvested
+      // using the existing expected loss calculation.
+      values[item.id] = Math.max(0, expected - expectedLoss);
+    }
+    setHarvestValues(values);
+  }
+
+  async function completeHarvest() {
     onError("");
-    if (!harvestItem) return;
-    setSaving(true);
+    setHarvesting(true);
     try {
-      await harvestGrowingBatchItem(batch, harvestItem.id, yieldGrams, readyDate, wastage, notes, uid, email);
-      setHarvestItem(null);
-      setYieldGrams(0);
-      setWastage(0);
-      setNotes("");
+      await harvestGrowingBatch(batch, harvestValues, uid, email);
+      setHarvestValues({});
+      await showSuccess(`Harvest completed for ${batch.batchNumber}.`);
       await onSaved();
     } catch (err) {
-      onError(err instanceof Error ? err.message : "Unable to harvest batch item.");
+      onError(err instanceof Error ? err.message : "Unable to complete harvest.");
     } finally {
-      setSaving(false);
+      setHarvesting(false);
     }
   }
 
-  const expected = batch.items.reduce((n, i) => n + i.expectedUsableYieldGrams, 0);
-  const actual = batch.items.reduce((n, i) => n + (i.actualYieldGrams ?? 0), 0);
+  const harvestingOpen = Object.keys(harvestValues).length > 0;
 
   return <>
     <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
@@ -531,7 +602,6 @@ function BatchDetails({ batch, uid, email, onBack, onSaved, onError }: {
           const ok = await confirmAction({ title: "Close batch?", text: `${batch.batchNumber} will be marked Closed.`, confirmText: "Close Batch" });
           if (!ok) return;
           try {
-            // Reuse the existing operational delivered/closed action.
             await markGrowingBatchDelivered(batch, uid, email);
             await showSuccess("Batch closed");
             await onSaved();
@@ -543,7 +613,7 @@ function BatchDetails({ batch, uid, email, onBack, onSaved, onError }: {
     </div>
 
     <div className="row g-3 mb-3">
-      <div className="col-md-4"><div className="card seedlings-kpi-card h-100"><div className="card-body"><div className="text-muted small">Expected usable</div><div className="h4 mb-0">{expected.toLocaleString()} gms</div></div></div></div>
+      <div className="col-md-4"><div className="card seedlings-kpi-card h-100"><div className="card-body"><div className="text-muted small">Expected</div><div className="h4 mb-0">{expected.toLocaleString()} gms</div></div></div></div>
       <div className="col-md-4"><div className="card seedlings-kpi-card h-100"><div className="card-body"><div className="text-muted small">Actual harvested</div><div className="h4 mb-0">{actual.toLocaleString()} gms</div></div></div></div>
       <div className="col-md-4"><div className="card seedlings-kpi-card h-100"><div className="card-body"><div className="text-muted small">Batch status</div><div className="h4 mb-0">{statusLabel(batch.status)}</div></div></div></div>
     </div>
@@ -552,40 +622,22 @@ function BatchDetails({ batch, uid, email, onBack, onSaved, onError }: {
       <div className="card-header"><h3 className="card-title mb-0">Microgreens Status</h3></div>
       <div className="table-responsive"><table className="table table-hover align-middle mb-0">
         <thead><tr>
-          <th>Microgreen</th><th>Trays</th><th>Soaking</th><th>Dark Period</th><th>Light Period</th><th>Total Usable</th><th>Actual Loss</th><th>Actual Harvested</th><th>Status</th><th className="text-end">Action</th>
+          <th>Microgreen</th><th>Trays</th><th>Soaking</th><th>Dark Period</th><th>Light Period</th><th>Expected</th><th>Actual Loss</th><th>Actual Harvested</th><th>Status</th>
         </tr></thead>
         <tbody>
           {batch.items.map(item => {
             const phase = item.phases;
-            const next = item.status === "completed_harvested"
-              ? "none"
-              : phase?.lightPeriod?.status === "completed"
-                ? "harvest"
-                : "next";
+            const loss = item.wastageGrams;
             return <tr key={item.id}>
               <td><strong>{item.productName}</strong></td>
               <td>{item.trayCount}</td>
-              <td><PhaseCell phase={phase?.soaking} /></td>
-              <td><PhaseCell phase={phase?.darkPeriod} /></td>
-              <td><PhaseCell phase={phase?.lightPeriod} /></td>
-              <td>{item.expectedUsableYieldGrams.toLocaleString()} gms</td>
-              <td>{item.wastageGrams == null ? "—" : `${item.wastageGrams.toLocaleString()} gms`}</td>
+              <td><PhaseCell phase={phase?.soaking} canStart={phaseCanStart(item, "soaking")} disabled={savingPhase !== null} onStart={() => updatePhase(item, "soaking", "start")} onEnd={() => updatePhase(item, "soaking", "end")} /></td>
+              <td><PhaseCell phase={phase?.darkPeriod} canStart={phaseCanStart(item, "darkPeriod")} disabled={savingPhase !== null} onStart={() => updatePhase(item, "darkPeriod", "start")} onEnd={() => updatePhase(item, "darkPeriod", "end")} /></td>
+              <td><PhaseCell phase={phase?.lightPeriod} canStart={phaseCanStart(item, "lightPeriod")} disabled={savingPhase !== null} onStart={() => updatePhase(item, "lightPeriod", "start")} onEnd={() => updatePhase(item, "lightPeriod", "end")} /></td>
+              <td>{item.expectedYieldGrams.toLocaleString()} gms</td>
+              <td>{loss == null ? "—" : `${loss.toLocaleString()} gms`}</td>
               <td>{item.actualYieldGrams == null ? "—" : `${item.actualYieldGrams.toLocaleString()} gms`}</td>
               <td><span className={`badge text-bg-${item.status === "completed_harvested" ? "success" : item.status === "in_progress" ? "warning" : "secondary"}`}>{item.status === "completed_harvested" ? "Completed/Harvested" : statusLabel(item.status)}</span></td>
-              <td className="text-end">
-                {next === "next" && <button className="btn btn-sm btn-primary" disabled={saving} onClick={() => advance(item)}>
-                  <i className="bi bi-arrow-right me-1" />Next Phase
-                </button>}
-                {next === "harvest" && <button className="btn btn-sm btn-success" disabled={saving} onClick={() => {
-                  setHarvestItem(item);
-                  setYieldGrams(item.expectedUsableYieldGrams + item.expectedLossGrams);
-                  setWastage(item.expectedLossGrams);
-                  setReadyDate(batch.harvestDate || today());
-                }}>
-                  <i className="bi bi-basket2 me-1" />Harvest
-                </button>}
-                {next === "none" && <span className="text-success small fw-semibold"><i className="bi bi-check-circle me-1" />Harvested</span>}
-              </td>
             </tr>;
           })}
         </tbody>
@@ -599,23 +651,39 @@ function BatchDetails({ batch, uid, email, onBack, onSaved, onError }: {
       <span><span className="rounded-circle bg-success d-inline-block me-1" style={{ width: 10, height: 10 }} />Completed</span>
     </div>
 
-    {harvestItem && <div className="card border-success mt-3">
-      <div className="card-header"><h3 className="card-title mb-0">Harvest — {harvestItem.productName}</h3></div>
-      <form onSubmit={harvest}>
-        <div className="card-body">
-          <div className="alert alert-info mb-3"><strong>Actual harvested = harvested before loss − actual loss.</strong> The net usable quantity is added to inventory.</div>
-          <div className="row g-3">
-            <div className="col-md-4"><label className="form-label">Harvested before loss (gms) *</label><input className="form-control" type="number" min="0" step="1" value={yieldGrams} onChange={e => setYieldGrams(Number(e.target.value))} required /></div>
-            <div className="col-md-4"><label className="form-label">Actual loss (gms)</label><input className="form-control" type="number" min="0" step="1" value={wastage} onChange={e => setWastage(Number(e.target.value))} /></div>
-            <div className="col-md-4"><label className="form-label">Harvest date *</label><input className="form-control" type="date" value={readyDate} onChange={e => setReadyDate(e.target.value)} required /></div>
-          </div>
-          <div className="alert alert-secondary mt-3 mb-0"><div className="d-flex justify-content-between"><span>Actual harvested / usable quantity</span><strong>{Math.max(0, yieldGrams - wastage).toLocaleString()} gms</strong></div></div>
+    {allPhasesCompleted && !harvestingOpen && batch.status !== "completed_harvested" && <div className="d-flex justify-content-center mt-3">
+      <button type="button" className="btn btn-success px-4" disabled={savingPhase !== null || harvesting} onClick={openHarvest}>
+        <i className="bi bi-basket2 me-1" />Harvest
+      </button>
+    </div>}
+
+    {harvestingOpen && <div className="card border-success mt-3">
+      <div className="card-header"><h3 className="card-title mb-0">Harvest</h3></div>
+      <div className="card-body">
+        <div className="alert alert-info mb-3">Actual Harvested is pre-filled as <strong>Expected − Expected Loss</strong>. Change it only when the actual harvest differs; Loss is calculated automatically as <strong>Expected − Actual Harvested</strong>.</div>
+        <div className="table-responsive">
+          <table className="table table-sm align-middle mb-0">
+            <thead><tr><th>Microgreen</th><th>Expected</th><th>Actual Harvested</th><th>Loss</th></tr></thead>
+            <tbody>
+              {batch.items.map(item => {
+                const value = Number(harvestValues[item.id] ?? 0);
+                const expected = Number(item.expectedYieldGrams ?? 0);
+                const loss = Math.max(0, expected - value);
+                return <tr key={item.id}>
+                  <td><strong>{item.productName}</strong></td>
+                  <td>{expected.toLocaleString()} gms</td>
+                  <td style={{ maxWidth: 220 }}><input className="form-control" type="number" min="0" max={expected} step="1" value={value} onChange={e => setHarvestValues(prev => ({ ...prev, [item.id]: Number(e.target.value) }))} /></td>
+                  <td>{loss.toLocaleString()} gms</td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
         </div>
-        <div className="card-footer d-flex justify-content-end gap-2">
-          <button type="button" className="btn btn-secondary" onClick={() => setHarvestItem(null)}>Cancel</button>
-          <button className="btn btn-success" disabled={saving}>{saving ? "Updating..." : "Confirm Harvest"}</button>
-        </div>
-      </form>
+      </div>
+      <div className="card-footer d-flex justify-content-end gap-2">
+        <button type="button" className="btn btn-secondary" disabled={harvesting} onClick={() => setHarvestValues({})}>Cancel</button>
+        <button type="button" className="btn btn-success" disabled={harvesting} onClick={completeHarvest}>{harvesting ? "Harvesting..." : "Complete Harvest"}</button>
+      </div>
     </div>}
   </>;
 }

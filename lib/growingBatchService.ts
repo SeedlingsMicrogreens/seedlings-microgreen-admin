@@ -125,17 +125,29 @@ function phaseStatus(item: GrowingBatchItem, key: PhaseKey) {
   return item.phases?.[key]?.status ?? "not_started";
 }
 
-function firstPendingPhase(item: GrowingBatchItem): PhaseKey | null {
-  for (const key of phaseKeys) {
-    if (phaseStatus(item, key) === "na") continue;
-    if (phaseStatus(item, key) !== "completed") return key;
+function previousApplicablePhase(item: GrowingBatchItem, key: PhaseKey): PhaseKey | null {
+  const index = phaseKeys.indexOf(key);
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const candidate = phaseKeys[i];
+    if (phaseStatus(item, candidate) !== "na") return candidate;
   }
   return null;
 }
 
-export async function advanceGrowingBatchItemPhase(
+function canStartPhase(item: GrowingBatchItem, key: PhaseKey) {
+  if (phaseStatus(item, key) !== "not_started") return false;
+  const previous = previousApplicablePhase(item, key);
+  return !previous || phaseStatus(item, previous) === "completed";
+}
+
+function phaseDateStamp(date = new Date()) {
+  return date.toISOString();
+}
+
+export async function startGrowingBatchItemPhase(
   batch: GrowingBatch,
   itemId: string,
+  phaseKey: PhaseKey,
   uid: string,
   email?: string,
 ) {
@@ -148,39 +160,200 @@ export async function advanceGrowingBatchItemPhase(
     const item = latest.items.find(x => x.id === itemId);
     if (!item) throw new Error("Batch microgreen no longer exists.");
     if (item.status === "completed_harvested") throw new Error("This microgreen has already been harvested.");
+    if (phaseStatus(item, phaseKey) === "na") throw new Error("This phase is not applicable.");
+    if (!canStartPhase(item, phaseKey)) {
+      throw new Error("Complete the previous growing phase before starting this phase.");
+    }
 
-    const currentKey = firstPendingPhase(item);
-    if (!currentKey) throw new Error("All growing phases are already complete. Harvest this microgreen.");
-
-    const nextPhases = {
+    const phases = {
       soaking: { ...(item.phases?.soaking ?? { status: "not_started" as GrowingBatchPhaseStatus }) },
       darkPeriod: { ...(item.phases?.darkPeriod ?? { status: "not_started" as GrowingBatchPhaseStatus }) },
       lightPeriod: { ...(item.phases?.lightPeriod ?? { status: "not_started" as GrowingBatchPhaseStatus }) },
     };
-
-    nextPhases[currentKey] = { ...nextPhases[currentKey], status: "completed" };
-    const currentIndex = phaseKeys.indexOf(currentKey);
-    for (let i = currentIndex + 1; i < phaseKeys.length; i += 1) {
-      const key = phaseKeys[i];
-      if (nextPhases[key].status === "na") continue;
-      nextPhases[key] = { ...nextPhases[key], status: "in_progress" };
-      break;
-    }
-
-    const updatedItems = latest.items.map(x => x.id === itemId
-      ? { ...x, phases: nextPhases, status: "in_progress" as const }
-      : x
-    );
+    phases[phaseKey] = {
+      ...phases[phaseKey],
+      status: "in_progress",
+      startedAt: phaseDateStamp(),
+    };
 
     transaction.update(batchRef, {
-      items: updatedItems,
+      items: latest.items.map(x => x.id === itemId
+        ? { ...x, phases, status: "in_progress" as const }
+        : x
+      ),
       status: "in_progress" as GrowingBatchStatus,
       updatedAt: serverTimestamp(),
     });
   });
 
-  await auditEvent("phase_progress", "growingBatches", batch.id, `Advanced growing phase for batch item ${itemId}`);
+  await auditEvent("phase_start", "growingBatches", batch.id, `Started ${phaseKey} for batch item ${itemId}`);
 }
+
+export async function completeGrowingBatchItemPhase(
+  batch: GrowingBatch,
+  itemId: string,
+  phaseKey: PhaseKey,
+  uid: string,
+  email?: string,
+) {
+  const batchRef = doc(db, "growingBatches", batch.id);
+
+  await runTransaction(db, async transaction => {
+    const snap = await transaction.get(batchRef);
+    if (!snap.exists()) throw new Error("Growing batch no longer exists.");
+    const latest = snap.data() as GrowingBatch;
+    const item = latest.items.find(x => x.id === itemId);
+    if (!item) throw new Error("Batch microgreen no longer exists.");
+    if (item.status === "completed_harvested") throw new Error("This microgreen has already been harvested.");
+    if (phaseStatus(item, phaseKey) !== "in_progress") {
+      throw new Error("Start this phase before completing it.");
+    }
+
+    const phases = {
+      soaking: { ...(item.phases?.soaking ?? { status: "not_started" as GrowingBatchPhaseStatus }) },
+      darkPeriod: { ...(item.phases?.darkPeriod ?? { status: "not_started" as GrowingBatchPhaseStatus }) },
+      lightPeriod: { ...(item.phases?.lightPeriod ?? { status: "not_started" as GrowingBatchPhaseStatus }) },
+    };
+    phases[phaseKey] = {
+      ...phases[phaseKey],
+      status: "completed",
+      endedAt: phaseDateStamp(),
+    };
+
+    transaction.update(batchRef, {
+      items: latest.items.map(x => x.id === itemId ? { ...x, phases } : x),
+      status: "in_progress" as GrowingBatchStatus,
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  await auditEvent("phase_complete", "growingBatches", batch.id, `Completed ${phaseKey} for batch item ${itemId}`);
+}
+
+/**
+ * Legacy single-step phase action retained for compatibility with older callers.
+ * New UI uses explicit Start and End actions.
+ */
+export async function advanceGrowingBatchItemPhase(
+  batch: GrowingBatch,
+  itemId: string,
+  uid: string,
+  email?: string,
+) {
+  const item = batch.items.find(x => x.id === itemId);
+  if (!item) throw new Error("Batch microgreen no longer exists.");
+  const key = phaseKeys.find(candidate => phaseStatus(item, candidate) !== "na" && phaseStatus(item, candidate) !== "completed");
+  if (!key) throw new Error("All growing phases are already complete. Harvest this microgreen.");
+  if (phaseStatus(item, key) === "not_started") {
+    await startGrowingBatchItemPhase(batch, itemId, key, uid, email);
+  } else {
+    await completeGrowingBatchItemPhase(batch, itemId, key, uid, email);
+  }
+}
+
+export async function harvestGrowingBatch(
+  batch: GrowingBatch,
+  actualHarvestByItemId: Record<string, number>,
+  uid: string,
+  email?: string,
+) {
+  const batchRef = doc(db, "growingBatches", batch.id);
+  const items = batch.items ?? [];
+  if (!items.length) throw new Error("This batch has no microgreens to harvest.");
+
+  for (const item of items) {
+    if (item.status === "completed_harvested") throw new Error(`${item.productName} has already been harvested.`);
+    const phases = item.phases;
+    if (!phases || (phases.soaking.status !== "na" && phases.soaking.status !== "completed") || phases.darkPeriod.status !== "completed" || phases.lightPeriod.status !== "completed") {
+      throw new Error(`Complete all applicable growing phases for ${item.productName} before harvesting.`);
+    }
+    const actual = Number(actualHarvestByItemId[item.id]);
+    if (!Number.isInteger(actual) || actual < 0) {
+      throw new Error(`Actual harvested quantity for ${item.productName} must be a whole number of grams.`);
+    }
+    const expected = Number(item.expectedYieldGrams ?? 0);
+    if (actual > expected) {
+      throw new Error(`Actual harvested quantity for ${item.productName} cannot be greater than Expected (${expected.toLocaleString()} gms).`);
+    }
+  }
+
+  await runTransaction(db, async transaction => {
+    const batchSnap = await transaction.get(batchRef);
+    if (!batchSnap.exists()) throw new Error("Growing batch no longer exists.");
+    const latest = batchSnap.data() as GrowingBatch;
+    const latestItems = latest.items ?? [];
+    const productIds = [...new Set(latestItems.map(item => item.productId))];
+    const productRefs = productIds.map(id => doc(db, "products", id));
+    const productSnaps = await Promise.all(productRefs.map(ref => transaction.get(ref)));
+    if (productSnaps.some(snap => !snap.exists())) throw new Error("One or more production products no longer exist. Refresh and retry.");
+
+    const productStates = new Map(productIds.map((id, index) => {
+      const product = productSnaps[index].data() as Product;
+      return [id, {
+        ref: productRefs[index],
+        product,
+        previousStock: Number(product.stockGrams ?? product.stock ?? 0),
+        added: 0,
+      }];
+    }));
+
+    const updatedItems = latestItems.map(item => {
+      const actualHarvested = Number(actualHarvestByItemId[item.id]);
+      const expected = Number(item.expectedYieldGrams ?? 0);
+      // Expected is the planned quantity before loss. Actual Harvested is the
+      // final usable quantity entered by the admin. Loss is the difference.
+      const loss = Math.max(0, expected - actualHarvested);
+      const actualUsable = actualHarvested;
+      const state = productStates.get(item.productId);
+      if (!state) throw new Error(`Product ${item.productName} is missing.`);
+      state.added += actualUsable;
+      return {
+        ...item,
+        actualReadyDate: latest.harvestDate || item.expectedReadyDate,
+        actualHarvestGrams: actualHarvested,
+        actualYieldGrams: actualUsable,
+        wastageGrams: loss,
+        status: "completed_harvested" as const,
+      };
+    });
+
+    for (const [productId, state] of productStates.entries()) {
+      const newStock = state.previousStock + state.added;
+      transaction.update(state.ref, {
+        stockGrams: newStock,
+        stock: newStock,
+        status: state.product.status === "out_of_stock" && newStock > 0 ? "active" : state.product.status,
+        updatedAt: serverTimestamp(),
+      });
+      const adjustmentRef = doc(collection(db, "inventoryAdjustments"));
+      transaction.set(adjustmentRef, {
+        // Firestore product documents do not necessarily store their document id
+        // inside the document. Use the product document id used for this state.
+        productId,
+        productName: state.product.name,
+        type: "harvest",
+        quantity: state.added,
+        unit: "g",
+        previousStock: state.previousStock,
+        newStock,
+        reason: `Harvested ${latest.batchNumber}`,
+        growingBatchId: batch.id,
+        createdByUid: uid,
+        createdByEmail: email ?? "",
+        createdAt: serverTimestamp(),
+      });
+    }
+
+    transaction.update(batchRef, {
+      items: updatedItems,
+      status: "completed_harvested" as GrowingBatchStatus,
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  await auditEvent("harvest", "growingBatches", batch.id, `Completed harvest for ${batch.batchNumber}`);
+}
+
 
 export async function harvestGrowingBatchItem(
   batch:GrowingBatch,itemId:string,actualYieldGrams:number,actualReadyDate:string,
