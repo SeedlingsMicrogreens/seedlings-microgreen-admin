@@ -74,31 +74,21 @@ export async function updateSalesProduct(id: string, data: Partial<Omit<SalesPro
   return updateRecord("salesProducts", id, data as Record<string, unknown>);
 }
 
-export async function deleteOrDeactivateSalesProduct(id: string) {
-  const [ordersSnapshot, subscriptionsSnapshot, deliveriesSnapshot] = await Promise.all([
-    getDocs(collection(db, "orders")),
-    getDocs(collection(db, "subscriptions")),
-    getDocs(collection(db, "subscriptionDeliveries")),
-  ]);
-
-  const referencedByOrder = ordersSnapshot.docs.some((item) => {
+export async function isSalesProductReferencedByOrder(id: string) {
+  const ordersSnapshot = await getDocs(collection(db, "orders"));
+  return ordersSnapshot.docs.some((item) => {
     const data = item.data() as { items?: Array<{ salableProductId?: string; productId?: string }> };
     return (data.items ?? []).some((orderItem) =>
       orderItem.salableProductId === id || orderItem.productId === id
     );
   });
+}
 
-  const referencedBySubscription = subscriptionsSnapshot.docs.some((item) => {
-    const data = item.data() as { salableProductId?: string; productId?: string };
-    return data.salableProductId === id || data.productId === id;
-  });
+export async function deleteOrDeactivateSalesProduct(id: string) {
+  // A salable Product cannot be hard-deleted once it is referenced by an order.
+  const referencedByOrder = await isSalesProductReferencedByOrder(id);
 
-  const referencedByDelivery = deliveriesSnapshot.docs.some((item) => {
-    const data = item.data() as { salableProductId?: string };
-    return data.salableProductId === id;
-  });
-
-  if (referencedByOrder || referencedBySubscription || referencedByDelivery) {
+  if (referencedByOrder) {
     await updateRecord("salesProducts", id, { active: false });
     return { action: "deactivated" as const };
   }

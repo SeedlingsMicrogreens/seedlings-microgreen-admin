@@ -60,6 +60,11 @@ export async function listCollectionByField<T>(name: string, field: string, valu
   return snapshot.docs.map(item => ({ id: item.id, ...(item.data() as T) }));
 }
 
+export async function listAllCollectionByField<T>(name: string, field: string, value: string): Promise<(T & { id: string })[]> {
+  const snapshot = await getDocs(query(collection(db, name), where(field, "==", value)));
+  return snapshot.docs.map(item => ({ id: item.id, ...(item.data() as T) }));
+}
+
 export async function createRecord<T extends Record<string, unknown>>(name: string, data: T) {
   const cleaned = sanitizeFirestoreData(data);
   const ref = await addDoc(collection(db, name), { ...cleaned, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });

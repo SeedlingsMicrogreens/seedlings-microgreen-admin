@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
-import { listCollection, updateRecord } from "@/lib/firestore";
+import { createRecord, listAllCollectionByField, listCollection, updateRecord } from "@/lib/firestore";
 import type { Customer, CustomerStatus } from "@/types/customer";
+import type { Order } from "@/types/order";
 import { formatAddress } from "@/lib/address";
-import {confirmAction} from "@/lib/alerts";
+import {confirmAction, showError, showSuccess} from "@/lib/alerts";
 
 function customerName(customer: Customer) {
   return customer.name?.trim() || "Unnamed customer";
@@ -13,11 +14,22 @@ function customerName(customer: Customer) {
 function customerPhone(customer: Customer) {
   return customer.mobileNumber || customer.phone || "—";
 }
+function dateValue(v: unknown) {
+  if (!v) return "—";
+  if (typeof v === "object" && v && "toDate" in v && typeof (v as any).toDate === "function") return (v as any).toDate().toLocaleString();
+  const d = new Date(v as any);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+}
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Customer | null>(null);
+  const [selectedOrders, setSelectedOrders] = useState<Order[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: "", mobileNumber: "", email: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -41,6 +53,56 @@ export default function CustomersPage() {
     );
   }, [customers, search]);
 
+  async function viewCustomer(customer: Customer) {
+    setSelected(customer);
+    setSelectedOrders([]);
+    setOrdersLoading(true);
+    try {
+      const orders = await listAllCollectionByField<Order>("orders", "customerId", customer.id);
+      orders.sort((a, b) => {
+        const toMillis = (value: unknown) => {
+          if (value && typeof value === "object" && "toDate" in value && typeof (value as any).toDate === "function") return (value as any).toDate().getTime();
+          const time = new Date(value as any).getTime();
+          return Number.isNaN(time) ? 0 : time;
+        };
+        return toMillis(b.createdAt) - toMillis(a.createdAt);
+      });
+      setSelectedOrders(orders);
+    } catch {
+      setError("Unable to load customer orders.");
+    } finally {
+      setOrdersLoading(false);
+    }
+  }
+
+  async function createCustomer(e: React.FormEvent) {
+    e.preventDefault();
+    const name = createForm.name.trim();
+    const mobileNumber = createForm.mobileNumber.trim();
+    const email = createForm.email.trim();
+    if (!name) { await showError("Enter customer name.", "Customer name required"); return; }
+    if (!mobileNumber && !email) { await showError("Enter mobile number or email address.", "Contact required"); return; }
+    setCreating(true);
+    try {
+      const ref = await createRecord("customers", {
+        name,
+        ...(mobileNumber ? { mobileNumber } : {}),
+        ...(email ? { email } : {}),
+        status: "active",
+        addresses: [],
+      });
+      const customer: Customer = { id: ref.id, name, ...(mobileNumber ? { mobileNumber } : {}), ...(email ? { email } : {}), status: "active", addresses: [] };
+      setCustomers(prev => [customer, ...prev]);
+      setCreateForm({ name: "", mobileNumber: "", email: "" });
+      setShowCreate(false);
+      await showSuccess("Customer created successfully.", "Customer Created");
+    } catch (e) {
+      await showError(e, "Unable to create customer.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
   async function changeStatus(customer: Customer, status: CustomerStatus) {
     const action = status === "blocked" ? "block" : "activate";
     if (!(await confirmAction({title:`${action === "block" ? "Block" : "Activate"} ${customerName(customer)}?`,text:`This will ${action} this customer account.`,confirmText:action === "block" ? "Yes, block" : "Yes, activate"}))) return;
@@ -62,9 +124,12 @@ export default function CustomersPage() {
             <h1 className="h3 seedlings-brand mb-1">Customers</h1>
             <p className="text-muted mb-0">Manage customer accounts, contact information and account status.</p>
           </div>
-          <div className="input-group" style={{ maxWidth: 380 }}>
+          <div className="d-flex align-items-center gap-2">
+            <button className="btn btn-primary" onClick={() => setShowCreate(true)}><i className="bi bi-person-plus me-1" />Create Customer</button>
+            <div className="input-group" style={{ maxWidth: 380 }}>
             <span className="input-group-text"><i className="bi bi-search" /></span>
             <input className="form-control" placeholder="Search name, mobile or email..." value={search} onChange={e => setSearch(e.target.value)} />
+            </div>
           </div>
         </div>
 
@@ -98,7 +163,7 @@ export default function CustomersPage() {
                       </span>
                     </td>
                     <td className="text-end">
-                      <button className="btn btn-sm btn-outline-primary" onClick={() => setSelected(customer)}>
+                      <button className="btn btn-sm btn-outline-primary" onClick={() => void viewCustomer(customer)}>
                         <i className="bi bi-eye me-1" /> View
                       </button>
                     </td>
@@ -115,6 +180,28 @@ export default function CustomersPage() {
             </table>
           </div>
         </div>
+
+        {showCreate && (
+          <div className="modal d-block" tabIndex={-1} role="dialog" aria-modal="true" onMouseDown={e => { if (e.target === e.currentTarget) setShowCreate(false); }}>
+            <div className="modal-dialog modal-dialog-centered">
+              <div className="modal-content">
+                <form onSubmit={createCustomer}>
+                  <div className="modal-header">
+                    <h2 className="modal-title h5 mb-0">Create Customer</h2>
+                    <button type="button" className="btn-close" aria-label="Close" onClick={() => setShowCreate(false)} />
+                  </div>
+                  <div className="modal-body">
+                    <div className="mb-3"><label className="form-label">Name *</label><input className="form-control" value={createForm.name} onChange={e => setCreateForm(v => ({ ...v, name: e.target.value }))} placeholder="Customer name" autoFocus /></div>
+                    <div className="mb-3"><label className="form-label">Mobile</label><input className="form-control" value={createForm.mobileNumber} onChange={e => setCreateForm(v => ({ ...v, mobileNumber: e.target.value }))} placeholder="Mobile number" inputMode="tel" /></div>
+                    <div className="mb-3"><label className="form-label">Email</label><input className="form-control" type="email" value={createForm.email} onChange={e => setCreateForm(v => ({ ...v, email: e.target.value }))} placeholder="Email address" /></div>
+                    <div className="form-text">Enter at least a mobile number or email address.</div>
+                  </div>
+                  <div className="modal-footer"><button type="button" className="btn btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button><button type="submit" className="btn btn-primary" disabled={creating}>{creating ? "Creating..." : "Create Customer"}</button></div>
+                </form>
+              </div>
+            </div>
+          </div>
+        )}
 
         {selected && (
           <div className="modal d-block" tabIndex={-1} role="dialog" aria-modal="true" onMouseDown={e => { if (e.target === e.currentTarget) setSelected(null); }}>
@@ -149,8 +236,38 @@ export default function CustomersPage() {
                       </div>
                     </div>
                   </div>
-                  <div className="alert alert-light border mt-3 mb-0 small">
+                  <div className="alert alert-light border mt-3 mb-3 small">
                     Customer ID: <span className="font-monospace">{selected.id}</span>
+                  </div>
+                  <div className="card border">
+                    <div className="card-header d-flex justify-content-between align-items-center">
+                      <strong><i className="bi bi-bag me-2" />Orders</strong>
+                      <span className="text-muted small">{ordersLoading ? "Loading..." : `${selectedOrders.length} order${selectedOrders.length === 1 ? "" : "s"}`}</span>
+                    </div>
+                    <div className="table-responsive">
+                      {ordersLoading ? (
+                        <div className="text-center text-muted py-4"><span className="spinner-border spinner-border-sm me-2" />Loading orders...</div>
+                      ) : selectedOrders.length ? (
+                        <table className="table table-hover align-middle mb-0 small">
+                          <thead><tr><th>Order</th><th>Date</th><th>Items</th><th>Total</th><th>Payment</th><th>Status</th><th>Delivery</th></tr></thead>
+                          <tbody>
+                            {selectedOrders.map(order => (
+                              <tr key={order.id}>
+                                <td><strong>{order.orderNumber || order.id}</strong></td>
+                                <td>{dateValue(order.createdAt)}</td>
+                                <td>{order.items?.map(item => `${item.productName} × ${item.quantity}`).join(", ") || "—"}</td>
+                                <td>₹{Number(order.total || 0).toFixed(2)}</td>
+                                <td><span className={`badge text-bg-${order.paymentStatus === "paid" ? "success" : order.paymentStatus === "failed" ? "danger" : "warning"}`}>{order.paymentStatus}</span></td>
+                                <td><span className={`badge text-bg-${order.status === "delivered" ? "success" : order.status === "cancelled" ? "danger" : "primary"}`}>{order.status.replaceAll("_", " ")}</span></td>
+                                <td>{order.scheduledDeliveryDate || "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <div className="text-muted text-center py-4">No orders found for this customer.</div>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="modal-footer">

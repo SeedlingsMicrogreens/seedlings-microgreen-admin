@@ -43,6 +43,7 @@ service cloud.firestore {
     match /deliveryCharges/{id} { allow read, write: if admin(); }
     match /customers/{id} { allow read, write: if admin(); }
     match /orders/{id} { allow read, write: if admin(); }
+    match /enquiries/{id} { allow read, write: if admin(); }
     match /deliveryUsers/{id} { allow read, write: if admin(); }
     match /deliveryAssignments/{id} { allow read, write: if admin(); }
     match /subscriptionDeliveries/{id} { allow read, write: if admin(); }

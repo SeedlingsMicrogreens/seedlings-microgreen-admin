@@ -1,7 +1,7 @@
 import { collection, doc, runTransaction, serverTimestamp } from "firebase/firestore";
 import { db } from "./firebase";
 import { deliveriesForFrequency, nextDeliveryOnDay } from "@/types/subscription";
-import type { Product } from "@/types/catalog";
+import type { SalesProduct } from "@/types/salesProduct";
 import type { Customer } from "@/types/customer";
 import type { Subscription, SubscriptionFrequency } from "@/types/subscription";
 
@@ -27,7 +27,7 @@ export function calculateSubscriptionEndDate(startDate: string, frequency: Subsc
 
 export function createSubscriptionPayload(args: {
   customer: Customer;
-  product: Product;
+  product: SalesProduct;
   sellingOptionId: string;
   quantity: number;
   frequency: SubscriptionFrequency;
@@ -69,7 +69,7 @@ export function createSubscriptionPayload(args: {
 
 export async function createSubscription(args: {
   customer: Customer;
-  product: Product;
+  product: SalesProduct;
   sellingOptionId: string;
   quantity: number;
   frequency: SubscriptionFrequency;

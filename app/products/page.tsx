@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { deleteField } from "firebase/firestore";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { createRecord, listCollection, updateRecord } from "@/lib/firestore";
-import { deleteOrDeactivateProduct } from "@/lib/productService";
+import { deleteOrDeactivateProduct, isProductReferencedBySalesProduct } from "@/lib/productService";
 import type { GrowingPhase, Product, ProductStatus } from "@/types/catalog";
 import {confirmAction} from "@/lib/alerts";
 
@@ -39,7 +39,6 @@ const emptyProduct: Omit<Product, "id"> = {
   slug: "",
   category: "Microgreens",
   status: "active",
-  featured: false,
   sortOrder: 0,
   // Current stock is never entered here. It comes from actual usable harvest.
   stockGrams: 0,
@@ -173,7 +172,7 @@ export default function ProductsPage() {
     const safety = Number(form.safetyStockGrams);
     const threshold = Number(form.lowStockThresholdGrams);
 
-    if (!form.name.trim()) return setError("Product name is required.");
+    if (!form.name.trim()) return setError("Microgreen name is required.");
     if (!form.sku?.trim()) return setError("SKU / product code is required.");
     const darkPeriodDays = Number(phases.find((phase) => phase.phase === "Dark Period")?.noOfDays ?? 0);
     const lightPeriodDays = Number(phases.find((phase) => phase.phase === "Light Period")?.noOfDays ?? 0);
@@ -200,7 +199,6 @@ export default function ProductsPage() {
       slug: sanitizeSlug(form.slug?.trim() ?? "") || slugify(form.name),
       category: form.category.trim() || "Microgreens",
       status: form.status,
-      featured: Boolean(form.featured),
       sortOrder: Number(form.sortOrder ?? 0),
 
       // Preserve the existing stock value during an edit, but never expose it
@@ -235,16 +233,20 @@ export default function ProductsPage() {
   }
 
   async function remove(id: string) {
-    if (!(await confirmAction({
-      title:"Delete this Microgreen?",
-      text:"This action cannot be undone. If this product is referenced by a growing batch, it will be retained and deactivated instead of being permanently deleted.",
-      confirmText:"Yes, delete",
-    }))) return;
     try {
+      if (await isProductReferencedBySalesProduct(id)) {
+        setError("Microgreen cannot be deleted because it is referenced by one or more Products.");
+        return;
+      }
+      if (!(await confirmAction({
+        title:"Delete this Microgreen?",
+        text:"This action cannot be undone. The Microgreen is not referenced by any Product and will be permanently deleted.",
+        confirmText:"Yes, delete",
+      }))) return;
       const result = await deleteOrDeactivateProduct(id);
       await load();
       setError(result.action === "deactivated"
-        ? "Product is referenced by a growing batch, so it was deactivated instead of deleted."
+        ? "Microgreen is referenced by a Product, so it could not be deleted."
         : "");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to delete product.");
@@ -297,7 +299,7 @@ export default function ProductsPage() {
                 <div className="col-md-7">
                   <div className="input-group">
                     <span className="input-group-text"><i className="bi bi-search" /></span>
-                    <input className="form-control" placeholder="Search by product, SKU or category..." value={search} onChange={(e) => setSearch(e.target.value)} />
+                    <input className="form-control" placeholder="Search by microgreen, SKU or category..." value={search} onChange={(e) => setSearch(e.target.value)} />
                   </div>
                 </div>
                 <div className="col-md-3">
@@ -317,7 +319,7 @@ export default function ProductsPage() {
               <table className="table table-hover align-middle mb-0">
                 <thead>
                   <tr>
-                    <th>Product</th>
+                    <th>Microgreen</th>
                     <th>SKU</th>
                     <th>Cycle</th>
                     <th>Expected / Tray</th>
@@ -369,7 +371,7 @@ export default function ProductsPage() {
                       <div className="card-body">
                         <div className="row g-3">
                           <div className="col-md-8">
-                            <label className="form-label">Product name *</label>
+                            <label className="form-label">Microgreen name *</label>
                             <input className="form-control" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
                           </div>
                           <div className="col-md-4">
@@ -488,17 +490,13 @@ export default function ProductsPage() {
                     <div className="card border mt-4">
                       <div className="card-header"><strong>Status</strong></div>
                       <div className="card-body">
-                        <label className="form-label">Product status</label>
+                        <label className="form-label">Microgreen status</label>
                         <select className="form-select mb-3" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as ProductStatus })}>
                           <option value="active">Active</option>
                           <option value="inactive">Inactive</option>
                           <option value="out_of_stock">Out of stock</option>
                           <option value="coming_soon">Coming soon</option>
                         </select>
-                        <div className="form-check">
-                          <input className="form-check-input" id="featured-product" type="checkbox" checked={Boolean(form.featured)} onChange={(e) => setForm({ ...form, featured: e.target.checked })} />
-                          <label className="form-check-label" htmlFor="featured-product">Featured</label>
-                        </div>
                       </div>
                     </div>
                   </div>

@@ -6,7 +6,7 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { createSubscription, updateSubscriptionStatus } from "@/lib/subscriptionService";
 import { confirmAction } from "@/lib/alerts";
 import { listCollection } from "@/lib/firestore";
-import type { Product } from "@/types/catalog";
+import type { SalesProduct } from "@/types/salesProduct";
 import type { Customer } from "@/types/customer";
 import {
   SUBSCRIPTION_FREQUENCIES,
@@ -30,7 +30,7 @@ function statusClass(s: SubscriptionStatus) {
 export default function SubscriptionsPage() {
   const { user } = useAuth();
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<SalesProduct[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [tab, setTab] = useState<"list" | "create">("list");
   const [selected, setSelected] = useState<Subscription | null>(null);
@@ -44,7 +44,7 @@ export default function SubscriptionsPage() {
     try {
       const [s, p, c] = await Promise.all([
         listCollection<Subscription>("subscriptions"),
-        listCollection<Product>("products"),
+        listCollection<SalesProduct>("salesProducts", "updatedAt"),
         listCollection<Customer>("customers"),
       ]);
       setSubscriptions(s);
@@ -122,7 +122,7 @@ export default function SubscriptionsPage() {
 }
 
 function CreateSubscription({ customers, products, uid, email, onCancel, onCreated, onError }: {
-  customers: Customer[]; products: Product[]; uid: string; email?: string;
+  customers: Customer[]; products: SalesProduct[]; uid: string; email?: string;
   onCancel: () => void; onCreated: () => Promise<void>; onError: (x: string) => void;
 }) {
   const [customerId, setCustomerId] = useState("");
@@ -179,8 +179,8 @@ function CreateSubscription({ customers, products, uid, email, onCancel, onCreat
       <div className="col-lg-7"><div className="card border"><div className="card-header"><strong>Subscription</strong></div><div className="card-body">
         <div className="row g-3">
           <div className="col-md-6"><label className="form-label">Customer *</label><select className="form-select" value={customerId} onChange={e => setCustomerId(e.target.value)} required><option value="">Select customer...</option>{customers.map(c => <option key={c.id} value={c.id}>{c.name || "Unnamed"}{c.mobileNumber ? ` — ${c.mobileNumber}` : ""}</option>)}</select></div>
-          <div className="col-md-6"><label className="form-label">Microgreen *</label><select className="form-select" value={productId} onChange={e => chooseProduct(e.target.value)} required><option value="">Select microgreen...</option>{products.filter(p => p.status !== "inactive").map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-          <div className="col-md-7"><label className="form-label">Selling / packing option *</label><select className="form-select" value={optionId} onChange={e => setOptionId(e.target.value)} disabled={!product} required><option value="">Select pack...</option>{options.map(o => <option key={o.id} value={o.id}>{packLabel(o.weightGrams)} — ₹{o.price}</option>)}</select></div>
+          <div className="col-md-6"><label className="form-label">Product *</label><select className="form-select" value={productId} onChange={e => chooseProduct(e.target.value)} required><option value="">Select product...</option>{products.filter(p => p.active).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+          <div className="col-md-7"><label className="form-label">Packaging option *</label><select className="form-select" value={optionId} onChange={e => setOptionId(e.target.value)} disabled={!product} required><option value="">Select packaging...</option>{options.map(o => <option key={o.id} value={o.id}>{packLabel(o.weightGrams)} — ₹{o.price}</option>)}</select></div>
           <div className="col-md-5"><label className="form-label">Packs per delivery *</label><input className="form-control" type="number" min="1" step="1" value={quantity} onChange={e => setQuantity(Number(e.target.value))} required/></div>
           <div className="col-md-4"><label className="form-label">Frequency *</label><select className="form-select" value={frequency} onChange={e => setFrequency(e.target.value as SubscriptionFrequency)}>{SUBSCRIPTION_FREQUENCIES.map(f => <option key={f} value={f}>{frequencyLabel(f)}</option>)}</select></div>
           <div className="col-md-4"><label className="form-label">Start date *</label><input className="form-control" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} required/></div>
@@ -192,7 +192,7 @@ function CreateSubscription({ customers, products, uid, email, onCancel, onCreat
         {!selectedOption ? <div className="text-muted">Select a product and selling option to preview the subscription.</div> : <>
           <div className="mb-3"><strong>{product?.name}</strong><div className="text-muted">{packLabel(selectedOption.weightGrams)} × {quantity}</div></div>
           <div className="row g-3 small"><div className="col-6"><span className="text-muted">Per delivery</span><strong className="d-block">₹{(selectedOption.price * quantity).toFixed(2)}</strong></div><div className="col-6"><span className="text-muted">Grams / delivery</span><strong className="d-block">{(selectedOption.weightGrams * quantity).toLocaleString()} gms</strong></div><div className="col-6"><span className="text-muted">Frequency</span><strong className="d-block">{frequencyLabel(frequency)}</strong></div><div className="col-6"><span className="text-muted">Deliveries</span><strong className="d-block">{total == null ? "Ongoing" : total}</strong></div><div className="col-6"><span className="text-muted">First delivery</span><strong className="d-block">{dateLabel(firstDelivery)}</strong></div><div className="col-6"><span className="text-muted">End date</span><strong className="d-block">{dateLabel(endDate)}</strong></div></div>
-          <div className="alert alert-light border mt-3 mb-0 small">This subscription will create normal orders for its deliveries. It does not directly deduct inventory.</div>
+          <div className="alert alert-light border mt-3 mb-0 small">The subscription uses the selected salable Product and Packaging option. It does not directly deduct inventory.</div>
         </>}
       </div></div></div>
     </div></div>

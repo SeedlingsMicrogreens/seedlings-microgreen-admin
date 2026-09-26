@@ -77,16 +77,27 @@ export async function adjustProductStock(
  * Production products can be hard-deleted only when no growing batch references them.
  * If a batch reference exists, retain the master record and soft-delete it by making it inactive.
  */
-export async function deleteOrDeactivateProduct(id: string) {
-  const snapshot = await getDocs(collection(db, "growingBatches"));
-  const referenced = snapshot.docs.some((item) => {
-    const data = item.data() as { items?: Array<{ productId?: string }> };
-    return (data.items ?? []).some((batchItem) => batchItem.productId === id);
+export async function isProductReferencedBySalesProduct(id: string) {
+  const snapshot = await getDocs(collection(db, "salesProducts"));
+  return snapshot.docs.some((item) => {
+    const data = item.data() as { components?: Array<{ productId?: string }> };
+    return (data.components ?? []).some((component) => component.productId === id);
   });
+}
 
-  if (referenced) {
+export async function deleteOrDeactivateProduct(id: string) {
+  // A production Microgreen is referenced by salable Products through their
+  // component productId. It must not be hard-deleted while such a reference exists.
+  const referencedBySalesProduct = await isProductReferencedBySalesProduct(id);
+
+  if (referencedBySalesProduct) {
     await updateRecord("products", id, { status: "inactive" });
-    await auditEvent("deactivate", "products", id, "Production product retained and deactivated because it is referenced by a growing batch.");
+    await auditEvent(
+      "deactivate",
+      "products",
+      id,
+      "Microgreen retained and deactivated because it is referenced by a salable Product."
+    );
     return { action: "deactivated" as const };
   }
 

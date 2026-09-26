@@ -3,24 +3,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { listCollection } from "@/lib/firestore";
-import type { Order } from "@/types/order";
-import type { Customer } from "@/types/customer";
-import { formatOrderStatus } from "@/types/order";
-import { formatAddressLines } from "@/lib/address";
 
-type ContactOrder = Order & {
-  requiresCustomerContact?: boolean;
-  availabilityRequestedGrams?: number;
-  availabilityAvailableGrams?: number;
-  availabilityShortageGrams?: number;
-  carryForwardQuantityGrams?: number;
-  availabilityDecision?: string;
-  deliveryDate?: string;
-  subscriptionNumber?: string;
-  subscriptionPlanName?: string;
+type Enquiry = {
+  id: string;
+  name?: string;
+  mobile?: string;
+  email?: string;
+  customerId?: string;
+  productName?: string;
+  message?: string;
+  source?: "customer_checkout" | "contact_page";
+  status?: "open" | "closed";
+  createdAt?: unknown;
+  updatedAt?: unknown;
 };
-
-function money(value: number) { return `₹${Number(value || 0).toFixed(2)}`; }
 
 function dateValue(value: unknown) {
   if (!value) return "—";
@@ -31,21 +27,9 @@ function dateValue(value: unknown) {
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 }
 
-function dateOnly(value?: string) {
-  if (!value) return "—";
-  const date = new Date(`${value}T00:00:00`);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
-}
-
-function contactReason(order: ContactOrder) {
-  const shortage = Number(order.availabilityShortageGrams ?? 0);
-  return shortage > 0 ? `Quantity shortage · ${shortage.toLocaleString()} gms` : "Customer requested contact";
-}
-
 export default function CustomerContactRequiredPage() {
-  const [orders, setOrders] = useState<ContactOrder[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [selected, setSelected] = useState<ContactOrder | null>(null);
+  const [enquiries, setEnquiries] = useState<Enquiry[]>([]);
+  const [selected, setSelected] = useState<Enquiry | null>(null);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -53,40 +37,42 @@ export default function CustomerContactRequiredPage() {
   async function load() {
     setLoading(true);
     try {
-      const [orderData, customerData] = await Promise.all([
-        listCollection<Order>("orders", "createdAt"),
-        listCollection<Customer>("customers", "updatedAt"),
-      ]);
-      setOrders(orderData.filter((order) => (order as ContactOrder).requiresCustomerContact === true) as ContactOrder[]);
-      setCustomers(customerData);
+      const data = await listCollection<Enquiry>("enquiries", "createdAt");
+      setEnquiries(data.filter((item) => item.status !== "closed"));
       setError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load customer-contact cases.");
-    } finally { setLoading(false); }
+      setError(err instanceof Error ? err.message : "Unable to load enquiries.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { void load(); }, []);
 
-  const customerMap = useMemo(() => new Map(customers.map((customer) => [customer.id, customer])), [customers]);
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
-    if (!term) return orders;
-    return orders.filter((order) => {
-      const customer = customerMap.get(order.customerId);
-      return [order.orderNumber, order.id, order.customerName, order.customerMobile, order.subscriptionNumber, order.subscriptionPlanName, customer?.name, customer?.mobileNumber]
-        .filter(Boolean).join(" ").toLowerCase().includes(term);
-    });
-  }, [orders, customerMap, search]);
+    if (!term) return enquiries;
+    return enquiries.filter((enquiry) => [
+      enquiry.id,
+      enquiry.name,
+      enquiry.mobile,
+      enquiry.email,
+      enquiry.customerId,
+      enquiry.productName,
+      enquiry.message,
+      enquiry.source,
+    ].filter(Boolean).join(" ").toLowerCase().includes(term));
+  }, [enquiries, search]);
 
   return <AdminPage>
     <div className="container-fluid py-3">
       <div className="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-3">
         <div>
           <h1 className="h3 seedlings-brand mb-1">Enquiries</h1>
-          <p className="text-muted mb-0">Orders where the customer asked to be contacted or delivery quantity needs manual confirmation.</p>
+          <p className="text-muted mb-0">Customer enquiries and availability requests. Enquiries are maintained separately from orders.</p>
         </div>
         <div className="d-flex align-items-center gap-2">
-          <span className="badge text-bg-warning fs-6">{orders.length} pending</span>
+          <span className="badge text-bg-warning fs-6">{enquiries.length} open</span>
           <button className="btn btn-outline-secondary" onClick={() => void load()} title="Refresh"><i className="bi bi-arrow-clockwise" /></button>
         </div>
       </div>
@@ -96,62 +82,53 @@ export default function CustomerContactRequiredPage() {
       <div className="card">
         <div className="card-header">
           <div className="row g-2 align-items-center">
-            <div className="col-md-7"><input className="form-control" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search customer, mobile, order or subscription..." /></div>
-            <div className="col-md-5 text-md-end small text-muted">Showing {filtered.length} of {orders.length} contact cases</div>
+            <div className="col-md-7"><input className="form-control" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, mobile, email or product..." /></div>
+            <div className="col-md-5 text-md-end small text-muted">Showing {filtered.length} of {enquiries.length} open enquiries</div>
           </div>
         </div>
         <div className="table-responsive">
           <table className="table table-hover align-middle mb-0">
             <thead>
               <tr>
-                <th>Order</th>
-                <th>Customer</th>
-                <th>Type</th>
-                <th>Delivery</th>
+                <th>Name</th>
+                <th>Mobile / Email</th>
+                <th>Product</th>
+                <th>Source</th>
+                <th>Created</th>
                 <th className="text-end">Action</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((order) => {
-                const customer = customerMap.get(order.customerId);
-                return <tr key={order.id}>
-                  <td><strong>{order.orderNumber || order.id.slice(0, 8)}</strong><div className="small text-muted">{dateValue(order.createdAt)}</div></td>
-                  <td><strong>{order.customerName || customer?.name || "Unnamed customer"}</strong><div className="small text-muted">{order.customerMobile || customer?.mobileNumber || "—"}</div></td>
-                  <td>{order.orderType === "subscription" ? <><span className="badge text-bg-primary">Subscription</span><div className="small text-muted">{order.subscriptionPlanName || "—"}</div></> : <span className="badge text-bg-light">One-time</span>}</td>
-                  <td>{dateOnly(order.scheduledDeliveryDate || order.deliveryDate)}</td>
-                  <td className="text-end"><button className="btn btn-sm btn-outline-primary" onClick={() => setSelected(order)}>View</button></td>
-                </tr>;
-              })}
-              {!filtered.length && !loading && <tr><td colSpan={7} className="text-center text-muted py-5"><i className="bi bi-check2-circle fs-2 d-block mb-2" />No customer-contact cases found.</td></tr>}
-              {loading && <tr><td colSpan={7} className="text-center py-5"><span className="spinner-border spinner-border-sm me-2" />Loading customer-contact cases...</td></tr>}
+              {filtered.map((enquiry) => <tr key={enquiry.id}>
+                <td><strong>{enquiry.name || "Unnamed"}</strong>{enquiry.customerId && <div className="small text-muted">Customer ID: {enquiry.customerId}</div>}</td>
+                <td><div>{enquiry.mobile || "—"}</div><div className="small text-muted text-break">{enquiry.email || "—"}</div></td>
+                <td>{enquiry.productName || "—"}</td>
+                <td>{enquiry.source === "customer_checkout" ? <span className="badge text-bg-warning">Shortage</span> : <span className="badge text-bg-light">Contact</span>}</td>
+                <td>{dateValue(enquiry.createdAt)}</td>
+                <td className="text-end"><button className="btn btn-sm btn-outline-primary" onClick={() => setSelected(enquiry)}>View</button></td>
+              </tr>)}
+              {!filtered.length && !loading && <tr><td colSpan={6} className="text-center text-muted py-5"><i className="bi bi-check2-circle fs-2 d-block mb-2" />No open enquiries found.</td></tr>}
+              {loading && <tr><td colSpan={6} className="text-center py-5"><span className="spinner-border spinner-border-sm me-2" />Loading enquiries...</td></tr>}
             </tbody>
           </table>
         </div>
       </div>
 
-      {selected && <ContactCaseDetails order={selected} customer={customerMap.get(selected.customerId)} onClose={() => setSelected(null)} />}
+      {selected && <EnquiryDetails enquiry={selected} onClose={() => setSelected(null)} />}
     </div>
   </AdminPage>;
 }
 
-function ContactCaseDetails({ order, customer, onClose }: { order: ContactOrder; customer?: Customer; onClose: () => void }) {
-  const requested = Number(order.availabilityRequestedGrams ?? 0);
-  const available = Number(order.availabilityAvailableGrams ?? 0);
-  const shortage = Number(order.availabilityShortageGrams ?? 0);
-  const address = order.deliveryAddress || customer?.addresses?.[0];
-
+function EnquiryDetails({ enquiry, onClose }: { enquiry: Enquiry; onClose: () => void }) {
   return <div className="modal d-block" tabIndex={-1} role="dialog" aria-modal="true" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable"><div className="modal-content">
-      <div className="modal-header"><div><h2 className="modal-title h5 mb-1">{order.orderNumber || order.id}</h2><div className="small text-muted">Customer Contact Required</div></div><button className="btn-close" aria-label="Close" onClick={onClose} /></div>
+      <div className="modal-header"><div><h2 className="modal-title h5 mb-1">Enquiry</h2><div className="small text-muted">{enquiry.source === "customer_checkout" ? "Availability shortage" : "Contact page"}</div></div><button className="btn-close" aria-label="Close" onClick={onClose} /></div>
       <div className="modal-body">
-        <div className="alert alert-warning d-flex gap-2 align-items-start"><i className="bi bi-exclamation-triangle-fill mt-1" /><div><strong>Customer contact is required.</strong><div className="small">{contactReason(order)}. Please contact the customer before fulfilment and confirm how to proceed.</div></div></div>
         <div className="row g-3">
-          <div className="col-md-6"><div className="border rounded p-3 h-100"><h3 className="h6">Customer</h3><dl className="row mb-0 small"><dt className="col-5">Name</dt><dd className="col-7">{order.customerName || customer?.name || "Unnamed"}</dd><dt className="col-5">Mobile</dt><dd className="col-7">{order.customerMobile || customer?.mobileNumber || "—"}</dd><dt className="col-5">Email</dt><dd className="col-7 text-break">{customer?.email || "—"}</dd></dl></div></div>
-          <div className="col-md-6"><div className="border rounded p-3 h-100"><h3 className="h6">Order</h3><dl className="row mb-0 small"><dt className="col-5">Type</dt><dd className="col-7">{order.orderType === "subscription" ? "Subscription" : "One-time"}</dd><dt className="col-5">Order date</dt><dd className="col-7">{dateValue(order.createdAt)}</dd><dt className="col-5">Delivery date</dt><dd className="col-7">{dateOnly(order.scheduledDeliveryDate || order.deliveryDate)}</dd><dt className="col-5">Total</dt><dd className="col-7"><strong>{money(order.total)}</strong></dd><dt className="col-5">Status</dt><dd className="col-7"><span className="badge text-bg-light">{formatOrderStatus(order.status)}</span></dd></dl></div></div>
+          <div className="col-md-6"><div className="border rounded p-3 h-100"><h3 className="h6">Customer</h3><dl className="row mb-0 small"><dt className="col-5">Name</dt><dd className="col-7">{enquiry.name || "—"}</dd><dt className="col-5">Mobile</dt><dd className="col-7">{enquiry.mobile || "—"}</dd><dt className="col-5">Email</dt><dd className="col-7 text-break">{enquiry.email || "—"}</dd><dt className="col-5">Customer ID</dt><dd className="col-7 text-break">{enquiry.customerId || "—"}</dd></dl></div></div>
+          <div className="col-md-6"><div className="border rounded p-3 h-100"><h3 className="h6">Enquiry</h3><dl className="row mb-0 small"><dt className="col-5">Product</dt><dd className="col-7">{enquiry.productName || "—"}</dd><dt className="col-5">Source</dt><dd className="col-7">{enquiry.source === "customer_checkout" ? "Shortage" : "Contact page"}</dd><dt className="col-5">Status</dt><dd className="col-7"><span className="badge text-bg-warning">{enquiry.status || "open"}</span></dd><dt className="col-5">Created</dt><dd className="col-7">{dateValue(enquiry.createdAt)}</dd></dl></div></div>
         </div>
-        <div className="border rounded p-3 mt-3"><h3 className="h6">Quantity / Availability</h3>{requested || available || shortage ? <div className="row g-3 small"><div className="col-sm-4"><span className="text-muted d-block">Requested</span><strong>{requested.toLocaleString()} gms</strong></div><div className="col-sm-4"><span className="text-muted d-block">Available</span><strong>{available.toLocaleString()} gms</strong></div><div className="col-sm-4"><span className="text-muted d-block">Shortage</span><strong className="text-danger">{shortage.toLocaleString()} gms</strong></div>{order.orderType === "subscription" && <div className="col-sm-6"><span className="text-muted d-block">Carry forward</span><strong>{Number(order.carryForwardQuantityGrams ?? 0).toLocaleString()} gms</strong></div>}<div className="col-sm-6"><span className="text-muted d-block">Customer decision</span><strong>{order.availabilityDecision === "contact" ? "Contact me" : order.availabilityDecision || "—"}</strong></div></div> : <div className="text-muted small">No availability snapshot was stored on this order.</div>}</div>
-        <div className="border rounded p-3 mt-3"><h3 className="h6">Delivery Address</h3><div className="small">{address ? formatAddressLines(address as any).map((line, index) => <div key={index}>{line}</div>) : <span className="text-muted">No delivery address stored.</span>}</div></div>
-        <div className="border rounded p-3 mt-3"><h3 className="h6">Items</h3><div className="table-responsive"><table className="table table-sm mb-0"><thead><tr><th>Product</th><th>Qty</th><th>Price</th><th className="text-end">Total</th></tr></thead><tbody>{order.items.map((item, index) => <tr key={index}><td>{item.productName}</td><td>{item.quantity}</td><td>{money(item.unitPrice)}</td><td className="text-end">{money(item.lineTotal)}</td></tr>)}</tbody></table></div></div>
+        <div className="border rounded p-3 mt-3"><h3 className="h6">Message</h3><p className="mb-0" style={{ whiteSpace: "pre-wrap" }}>{enquiry.message || "—"}</p></div>
       </div>
       <div className="modal-footer"><button className="btn btn-secondary" onClick={onClose}>Close</button></div>
     </div></div>

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { ImageGalleryUploader } from "@/components/ui/ImageGalleryUploader";
 import { RichTextEditor } from "@/components/ui/RichTextEditor";
-import { createSalesProduct, deleteOrDeactivateSalesProduct, listSalesProducts, updateSalesProduct, validateSalesProduct } from "@/lib/salesProductService";
+import { createSalesProduct, deleteOrDeactivateSalesProduct, isSalesProductReferencedByOrder, listSalesProducts, updateSalesProduct, validateSalesProduct } from "@/lib/salesProductService";
 import { listCollection } from "@/lib/firestore";
 import type { Product } from "@/types/catalog";
 import type { Packaging } from "@/types/packaging";
@@ -179,12 +179,16 @@ export default function SalesProductsPage() {
   }
 
   async function remove(id: string) {
-    if (!(await confirmAction({
-      title:"Delete this Product?",
-      text:"This action cannot be undone. If this product is referenced by an order, subscription, or subscription delivery, it will be retained and deactivated instead of being permanently deleted.",
-      confirmText:"Yes, delete",
-    }))) return;
     try {
+      if (await isSalesProductReferencedByOrder(id)) {
+        setError("Product cannot be deleted because it is referenced by one or more orders.");
+        return;
+      }
+      if (!(await confirmAction({
+        title:"Delete this Product?",
+        text:"This action cannot be undone. The Product is not referenced by any order and will be permanently deleted.",
+        confirmText:"Yes, delete",
+      }))) return;
       const result = await deleteOrDeactivateSalesProduct(id);
       await load();
       setError(result.action === "deactivated"

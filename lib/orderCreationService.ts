@@ -2,7 +2,7 @@ import { createRecord, sanitizeFirestoreData, updateRecord } from "./firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { storage, auth } from "./firebase";
 import type { Customer } from "@/types/customer";
-import type { SalesProduct } from "@/types/salesProduct";
+import type { SalesProduct, SalesProductSellingOption } from "@/types/salesProduct";
 
 export async function uploadOrderPaymentReceipt(orderId: string, file: File, transactionKey?: string) {
   if (!file) return null;
@@ -20,8 +20,10 @@ export async function uploadOrderPaymentReceipt(orderId: string, file: File, tra
 
 export async function createAdminOrder(args: {
   customer: Customer;
-  items: { salableProduct: SalesProduct; quantity: number; imageUrl?: string }[];
+  items: { salableProduct: SalesProduct; sellingOption: SalesProductSellingOption; quantity: number; imageUrl?: string }[];
   deliveryCharge?: { id: string; name: string; amount: number } | null;
+  discount?: number;
+  appliedOffers?: { priceOfferId?: string; priceOfferName?: string; deliveryOfferId?: string; deliveryOfferName?: string };
   scheduledDeliveryDate?: string;
   notes?: string;
   amountPaid?: number;
@@ -44,24 +46,26 @@ export async function createAdminOrder(args: {
     salableProductType: x.salableProduct.type,
     productId: x.salableProduct.id,
     productName: x.salableProduct.name,
-    sellingOptionId: x.salableProduct.id,
-    sellingOptionLabel: x.salableProduct.type === "multiple"
-      ? "Combo"
-      : (x.salableProduct.components[0] ? `${x.salableProduct.components[0].quantityGrams}g` : "Single"),
-    weightGrams: x.salableProduct.components.reduce((n, c) => n + Number(c.quantityGrams || 0), 0),
+    sellingOptionId: x.sellingOption.id,
+    sellingOptionLabel: x.sellingOption.weightGrams >= 1000 && x.sellingOption.weightGrams % 1000 === 0
+      ? `${x.sellingOption.weightGrams / 1000}kg box`
+      : `${x.sellingOption.weightGrams}g box`,
+    weightGrams: Number(x.sellingOption.weightGrams),
     quantity: x.quantity,
-    unitPrice: Number(x.salableProduct.sellingPrice),
-    lineTotal: Number(x.salableProduct.sellingPrice) * x.quantity,
+    unitPrice: Number(x.sellingOption.price),
+    lineTotal: Number(x.sellingOption.price) * x.quantity,
     imageUrl: x.imageUrl || x.salableProduct.imageUrl || "",
   }));
 
   const subtotal = items.reduce((n, x) => n + x.lineTotal, 0);
-  const deliveryFee = Number(args.deliveryCharge?.amount || 0);
+  const rawDeliveryFee = Number(args.deliveryCharge?.amount || 0);
+  const discount = Math.min(subtotal + rawDeliveryFee, Math.max(0, Number(args.discount || 0)));
+  const deliveryFee = rawDeliveryFee;
   const orderNumber = `ORD-${Date.now().toString(36).toUpperCase()}`;
   const transactionId = args.transactionId?.trim() || "";
   const actor = auth.currentUser;
   const paidAmount = Number(args.amountPaid || 0);
-  const total = subtotal + deliveryFee;
+  const total = Math.max(0, subtotal + deliveryFee - discount);
   if (!Number.isFinite(paidAmount) || paidAmount < 0 || paidAmount > total + 0.005) {
     throw new Error(`Amount paid must be between ₹0.00 and ₹${total.toFixed(2)}.`);
   }
@@ -77,7 +81,7 @@ export async function createAdminOrder(args: {
     items,
     subtotal,
     deliveryFee,
-    discount: 0,
+    discount,
     total,
     currency: "INR",
     paymentStatus,
@@ -107,6 +111,7 @@ export async function createAdminOrder(args: {
     deliveryChargeId: args.deliveryCharge?.id || "",
     deliveryChargeName: args.deliveryCharge?.name || "",
     deliveryChargeSnapshot: deliveryFee,
+    appliedOffers: args.appliedOffers ?? {},
     packingStatus: "pending",
     paymentRecordedByUid: actor?.uid || "",
     paymentRecordedByEmail: actor?.email || "",
