@@ -9,17 +9,23 @@ import type { GrowingPhase, Product, ProductStatus } from "@/types/catalog";
 import {confirmAction} from "@/lib/alerts";
 
 const FIXED_GROWING_PHASES: GrowingPhase[] = [
-  { phase: "Soaking", noOfDays: 1 },
+  { phase: "Soaking", noOfDays: 0 },
   { phase: "Dark Period", noOfDays: 3 },
   { phase: "Light Period", noOfDays: 4 },
 ];
 const DEFAULT_GROWING_CYCLE_DAYS = FIXED_GROWING_PHASES.reduce((sum, item) => sum + item.noOfDays, 0);
 
-function normalizeGrowingPhases(phases?: GrowingPhase[]) {
+function normalizeGrowingPhases(phases?: GrowingPhase[], soakingRequired = false) {
   return FIXED_GROWING_PHASES.map((fixedPhase) => {
     const existing = phases?.find((phase) => phase.phase === fixedPhase.phase);
+
+    if (fixedPhase.phase === "Soaking") {
+      return { phase: fixedPhase.phase, noOfDays: soakingRequired ? 1 : 0 };
+    }
+
     const days = Number(existing?.noOfDays ?? fixedPhase.noOfDays);
-    return { phase: fixedPhase.phase, noOfDays: Math.min(5, Math.max(0, Number.isFinite(days) ? days : fixedPhase.noOfDays)) };
+    const maxDays = fixedPhase.phase === "Light Period" ? 15 : 5;
+    return { phase: fixedPhase.phase, noOfDays: Math.min(maxDays, Math.max(0, Number.isFinite(days) ? days : fixedPhase.noOfDays)) };
   });
 }
 
@@ -40,7 +46,7 @@ const emptyProduct: Omit<Product, "id"> = {
   lowStockThresholdGrams: 500,
   growingActive: true,
   growingPhases: normalizeGrowingPhases(),
-  soakingRequired: true,
+  soakingRequired: false,
   growingCycleDays: DEFAULT_GROWING_CYCLE_DAYS,
   expectedYieldGramsPerTray: 200,
   minimumYieldGramsPerTray: 150,
@@ -134,9 +140,9 @@ export default function ProductsPage() {
       stockGrams: stockValue(product),
       lowStockThresholdGrams: thresholdValue(product),
       growingActive: product.growingActive !== false,
-      growingPhases: normalizeGrowingPhases(product.growingPhases),
-      soakingRequired: product.soakingRequired !== false,
-      growingCycleDays: growingCycleDays(normalizeGrowingPhases(product.growingPhases)),
+      soakingRequired: product.soakingRequired === undefined ? true : product.soakingRequired === true,
+      growingPhases: normalizeGrowingPhases(product.growingPhases, product.soakingRequired === undefined ? true : product.soakingRequired === true),
+      growingCycleDays: growingCycleDays(normalizeGrowingPhases(product.growingPhases, product.soakingRequired === undefined ? true : product.soakingRequired === true)),
       expectedYieldGramsPerTray: Number(product.expectedYieldGramsPerTray ?? product.expectedYieldGramsPerBatch ?? 0),
       minimumYieldGramsPerTray: Number(product.minimumYieldGramsPerTray ?? product.minimumBatchYieldGrams ?? 0),
       expectedLossGramsPerTray: Number(product.expectedLossGramsPerTray ?? 0),
@@ -158,7 +164,8 @@ export default function ProductsPage() {
     event.preventDefault();
     setError("");
 
-    const phases = normalizeGrowingPhases(form.growingPhases);
+    const soakingRequired = form.soakingRequired === true;
+    const phases = normalizeGrowingPhases(form.growingPhases, soakingRequired);
     const cycle = growingCycleDays(phases);
     const expected = Number(form.expectedYieldGramsPerTray);
     const minimum = Number(form.minimumYieldGramsPerTray);
@@ -168,7 +175,12 @@ export default function ProductsPage() {
 
     if (!form.name.trim()) return setError("Product name is required.");
     if (!form.sku?.trim()) return setError("SKU / product code is required.");
-    if (phases.some((phase) => !Number.isInteger(Number(phase.noOfDays)) || Number(phase.noOfDays) < 0 || Number(phase.noOfDays) > 5)) return setError("Each growing phase must be between 0 and 5 days.");
+    const darkPeriodDays = Number(phases.find((phase) => phase.phase === "Dark Period")?.noOfDays ?? 0);
+    const lightPeriodDays = Number(phases.find((phase) => phase.phase === "Light Period")?.noOfDays ?? 0);
+    const soakingDays = Number(phases.find((phase) => phase.phase === "Soaking")?.noOfDays ?? 0);
+    if (soakingDays !== (soakingRequired ? 1 : 0)) return setError("Soaking days are controlled by Soaking required?.");
+    if (!Number.isInteger(darkPeriodDays) || darkPeriodDays < 0 || darkPeriodDays > 5) return setError("Dark Period must be between 0 and 5 days.");
+    if (!Number.isInteger(lightPeriodDays) || lightPeriodDays < 0 || lightPeriodDays > 15) return setError("Light Period must be between 0 and 15 days.");
     if (!Number.isInteger(cycle) || cycle <= 0) return setError("Growing cycle must be at least 1 whole day.");
     if (!Number.isInteger(expected) || expected <= 0) return setError("Expected yield per tray must be greater than 0.");
     if (!Number.isInteger(minimum) || minimum < 0) return setError("Minimum yield per tray cannot be negative.");
@@ -198,7 +210,7 @@ export default function ProductsPage() {
 
       growingActive: form.growingActive !== false,
       growingPhases: phases,
-      soakingRequired: form.soakingRequired !== false,
+      soakingRequired,
       growingCycleDays: cycle,
       expectedYieldGramsPerTray: expected,
       minimumYieldGramsPerTray: minimum,
@@ -411,6 +423,8 @@ export default function ProductsPage() {
                         <div className="row g-3">
                           {FIXED_GROWING_PHASES.map((phase) => {
                             const current = form.growingPhases?.find((item) => item.phase === phase.phase)?.noOfDays ?? phase.noOfDays;
+                            const isSoaking = phase.phase === "Soaking";
+                            const maxDays = phase.phase === "Light Period" ? 15 : 5;
                             return (
                               <div className="col-md-4" key={phase.phase}>
                                 <label className="form-label">{phase.phase} (days) *</label>
@@ -418,28 +432,34 @@ export default function ProductsPage() {
                                   className="form-control"
                                   type="number"
                                   min="0"
-                                  max="5"
+                                  max={maxDays}
                                   step="1"
                                   value={current}
+                                  readOnly={isSoaking}
                                   onChange={(e) => {
-                                    const value = Math.min(5, Math.max(0, Number(e.target.value) || 0));
-                                    const next = normalizeGrowingPhases(form.growingPhases).map((item) => item.phase === phase.phase ? { ...item, noOfDays: value } : item);
+                                    if (isSoaking) return;
+                                    const value = Math.min(maxDays, Math.max(0, Number(e.target.value) || 0));
+                                    const next = normalizeGrowingPhases(form.growingPhases, form.soakingRequired === true).map((item) => item.phase === phase.phase ? { ...item, noOfDays: value } : item);
                                     setForm({ ...form, growingPhases: next, growingCycleDays: growingCycleDays(next) });
                                   }}
                                   required
                                 />
-                                <div className="form-text">Maximum 5 days.</div>
+                                <div className="form-text">{isSoaking ? "Controlled by Soaking required?" : `Maximum ${maxDays} days.`}</div>
                               </div>
                             );
                           })}
                           <div className="col-md-4">
                             <label className="form-label">Growing cycle (days)</label>
-                            <input className="form-control" type="number" value={growingCycleDays(normalizeGrowingPhases(form.growingPhases))} readOnly />
+                            <input className="form-control" type="number" value={growingCycleDays(normalizeGrowingPhases(form.growingPhases, form.soakingRequired === true))} readOnly />
                             <div className="form-text">Automatically calculated from the three phases.</div>
                           </div>
                           <div className="col-md-4 d-flex align-items-end">
                             <div className="form-check mb-2">
-                              <input className="form-check-input" id="soaking-required" type="checkbox" checked={form.soakingRequired !== false} onChange={(e) => setForm({ ...form, soakingRequired: e.target.checked })} />
+                              <input className="form-check-input" id="soaking-required" type="checkbox" checked={form.soakingRequired === true} onChange={(e) => {
+                                const soakingRequired = e.target.checked;
+                                const next = normalizeGrowingPhases(form.growingPhases, soakingRequired);
+                                setForm({ ...form, soakingRequired, growingPhases: next, growingCycleDays: growingCycleDays(next) });
+                              }} />
                               <label className="form-check-label" htmlFor="soaking-required">Soaking required?</label>
                             </div>
                           </div>
