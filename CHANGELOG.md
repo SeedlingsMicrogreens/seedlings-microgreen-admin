@@ -284,3 +284,9 @@ Future small fixes should normally update `CHANGELOG.md` rather than creating an
 - Added Close Batch action in Inventory; closing sets each harvested item's batch stock to its sold quantity and closes the batch.
 - Removed the manual Close Batch button from the Growing Batch detail view.
 - Existing handover sold-quantity recording remains unchanged.
+
+## Phase 43 — Product Image Dimension Validation
+- Removed the fixed 1200 × 1200 px requirement from Sales Product Create/Update image validation.
+- Product images must remain square (1:1), PNG/JPG/JPEG, and at or below 1 MB.
+- Existing file-size guidance remains: ideal 150–400 KB; up to ~700 KB recommended.
+- Smaller square images such as 600 × 600 px are now accepted.

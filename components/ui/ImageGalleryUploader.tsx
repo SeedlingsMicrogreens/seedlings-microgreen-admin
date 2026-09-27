@@ -8,8 +8,7 @@ type Props = {
   onChange: (urls: string[]) => void;
   label?: string;
   validation?: {
-    exactWidth: number;
-    exactHeight: number;
+    square?: boolean;
     maxBytes: number;
     allowedTypes: string[];
   };
@@ -75,8 +74,8 @@ export function ImageGalleryUploader({
       const image = new Image();
       image.onload = () => {
         URL.revokeObjectURL(url);
-        if (image.width !== validation.exactWidth || image.height !== validation.exactHeight) {
-          resolve(`Image must be exactly ${validation.exactWidth} × ${validation.exactHeight} px (1:1).`);
+        if (validation.square && image.width !== image.height) {
+          resolve("Image must be a square image with a 1:1 aspect ratio.");
           return;
         }
         resolve(null);
