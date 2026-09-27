@@ -89,7 +89,7 @@ export async function updateGrowingBatchBeforeStart(data: {
   email?: string;
 }) {
   if (!data.harvestDate) throw new Error("Harvest date is required.");
-  if (data.batch.status !== "not_started" || data.batch.delivered || data.batch.status === "closed") {
+  if (data.batch.status !== "not_started" || data.batch.delivered) {
     throw new Error("Only a Not Started batch can be edited.");
   }
 
@@ -103,7 +103,7 @@ export async function updateGrowingBatchBeforeStart(data: {
     const snapshot = await transaction.get(batchRef);
     if (!snapshot.exists()) throw new Error("Growing batch no longer exists.");
     const latest = { id: snapshot.id, ...(snapshot.data() as Omit<GrowingBatch, "id">) };
-    if (latest.status !== "not_started" || latest.delivered || latest.status === "closed") {
+    if (latest.status !== "not_started" || latest.delivered) {
       throw new Error("Only a Not Started batch can be edited. Refresh and try again.");
     }
 
