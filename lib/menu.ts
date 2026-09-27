@@ -45,6 +45,7 @@ export const menuItems: MenuNode[] = [
       { type: "item", text: "Website Pages", href: "/cms/pages", icon: "bi-file-earmark-text" },
       { type: "item", text: "Hero Slider", href: "/cms/banners", icon: "bi-images" },
       { type: "item", text: "Our Journey", href: "/cms/journey", icon: "bi-signpost-2" },
+      { type: "item", text: "Seedlings Feedback", href: "/cms/seedlings-feedback", icon: "bi-chat-heart" },
       { type: "item", text: "Trust Points", href: "/cms/trust-points", icon: "bi-shield-check" },
       { type: "item", text: "FAQ", href: "/cms/faq", icon: "bi-question-circle" },
       { type: "item", text: "Testimonials", href: "/cms/testimonials", icon: "bi-chat-quote" },

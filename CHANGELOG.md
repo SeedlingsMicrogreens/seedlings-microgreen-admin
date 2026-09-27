@@ -2,6 +2,15 @@
 
 This file replaces the previous collection of phase-specific Markdown notes. It keeps the useful historical context without maintaining dozens of competing documentation files.
 
+## Phase 45 — Seedlings Feedback image validation refinement
+
+- Seedlings Feedback images now use feedback-specific validation instead of Product image validation.
+- Images must be landscape 3:2 with minimum dimensions of 900×600 px.
+- 1200×800 px is the recommended image size.
+- PNG/JPG/JPEG are supported and files above 1 MB are rejected.
+- Images are not automatically cropped or resized to force the aspect ratio.
+- Ideal file size guidance is 150–500 KB; up to ~700 KB is recommended.
+
 ## Phase 42 — Not Started Growing Batch Editing
 
 - Added an Edit Batch action only for Growing Batches with status `not_started`.
@@ -290,3 +299,11 @@ Future small fixes should normally update `CHANGELOG.md` rather than creating an
 - Product images must remain square (1:1), PNG/JPG/JPEG, and at or below 1 MB.
 - Existing file-size guidance remains: ideal 150–400 KB; up to ~700 KB recommended.
 - Smaller square images such as 600 × 600 px are now accepted.
+
+## Seedlings Feedback
+- Added `CMS → Seedlings Feedback` as a separate admin menu/page for feedback displayed on the website Journey page.
+- Supports Text + optional image, Image, and YouTube Video feedback types.
+- Feedback images use the existing Product image validation: square 1:1, PNG/JPG/JPEG, maximum 1 MB, with 150–400 KB ideal guidance.
+- YouTube feedback accepts a normal YouTube URL; the admin UI extracts/stores the video ID and uses the YouTube embed URL for preview. Embed/iframe HTML is not accepted.
+- Added draft/published status and display order, with edit/delete support.
+- Added Firestore access rule for `seedlingsFeedback` and `websiteJourneyContent`.

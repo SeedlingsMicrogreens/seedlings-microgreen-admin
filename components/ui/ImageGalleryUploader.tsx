@@ -9,6 +9,10 @@ type Props = {
   label?: string;
   validation?: {
     square?: boolean;
+    aspectRatio?: number;
+    aspectRatioTolerance?: number;
+    minWidth?: number;
+    minHeight?: number;
     maxBytes: number;
     allowedTypes: string[];
   };
@@ -76,6 +80,23 @@ export function ImageGalleryUploader({
         URL.revokeObjectURL(url);
         if (validation.square && image.width !== image.height) {
           resolve("Image must be a square image with a 1:1 aspect ratio.");
+          return;
+        }
+        if (validation.aspectRatio) {
+          const actualRatio = image.width / image.height;
+          const tolerance = validation.aspectRatioTolerance ?? 0.01;
+          if (Math.abs(actualRatio - validation.aspectRatio) > tolerance) {
+            const expected = `${validation.aspectRatio.toFixed(2)}:1`;
+            resolve(`Image must have a ${expected} aspect ratio. Do not crop the image automatically.`);
+            return;
+          }
+        }
+        if (validation.minWidth && image.width < validation.minWidth) {
+          resolve(`Image width must be at least ${validation.minWidth}px.`);
+          return;
+        }
+        if (validation.minHeight && image.height < validation.minHeight) {
+          resolve(`Image height must be at least ${validation.minHeight}px.`);
           return;
         }
         resolve(null);

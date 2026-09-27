@@ -9,6 +9,7 @@ const groups=[
  {title:"Website Pages",items:[
   ["Website Pages","Predefined Microgreens and Contact page content","/cms/pages","file-earmark-text"],
   ["Our Journey","Fixed Journey page sections","/cms/journey","signpost-2"],
+  ["Seedlings Feedback","Feedback shown on the website Journey page","/cms/seedlings-feedback","chat-heart"],
  ]},
  {title:"Website Content",items:[
   ["FAQ","Homepage FAQ content","/cms/faq","question-circle"],

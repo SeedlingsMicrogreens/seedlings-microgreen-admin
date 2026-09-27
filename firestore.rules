@@ -61,6 +61,8 @@ service cloud.firestore {
     match /auditEvents/{id} { allow read, write: if admin(); }
 
     match /websiteTrustPoints/{id} { allow read, write: if admin(); }
+    match /websiteJourneyContent/{id} { allow read, write: if admin(); }
+    match /seedlingsFeedback/{id} { allow read, write: if admin(); }
     match /{document=**} { allow read, write: if false; }
   }
 }
