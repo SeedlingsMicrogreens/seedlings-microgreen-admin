@@ -100,3 +100,18 @@ Before a release/merge of substantial Admin work:
 - run production build when dependencies/environment permit
 - verify Firestore rules and authorization for changed collections
 - verify historical snapshots are preserved
+
+### Waste Reconciliation Firestore Transaction Fix
+- Moved `inventoryAdjustments` waste-history query outside the Firestore transaction because Web SDK transaction reads must target document references.
+- Kept Product stock and growing-batch updates atomic inside the transaction.
+- Preserved cumulative waste calculation and adjustment-history behavior.
+
+
+### Batch Close — Final Waste Handling
+- Close Batch automatically treats every remaining batch Stock gram as Waste for all harvested microgreens.
+- Product aggregate stock is deducted by that final waste quantity and a `batch_waste` adjustment is recorded.
+- Batch item Stock becomes 0g, cumulative Total Waste is preserved/increased, and the batch status becomes `closed`.
+- Update Reconciliation continues to handle incremental Waste entries before closing.
+### Closed Batch Detail — Per-Microgreen Waste
+- Closed batch microgreen details now display Waste (gms) instead of the redundant per-microgreen Status.
+- Waste is read directly from each microgreen item's cumulative `batchWasteGrams`.

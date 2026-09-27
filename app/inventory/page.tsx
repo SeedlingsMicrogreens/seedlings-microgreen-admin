@@ -15,7 +15,7 @@ export default function InventoryPage() {
   const [adjustments, setAdjustments] = useState<InventoryAdjustment[]>([]);
   const [batches, setBatches] = useState<GrowingBatch[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState("");
-  const [soldQuantities, setSoldQuantities] = useState<Record<string, number>>({});
+  const [wasteQuantities, setWasteQuantities] = useState<Record<string, number>>({});
   const [savingBatch, setSavingBatch] = useState(false);
   const [closingBatch, setClosingBatch] = useState(false);
   const [error, setError] = useState("");
@@ -55,40 +55,53 @@ export default function InventoryPage() {
   function selectBatch(id: string) {
     setSelectedBatchId(id);
     const batch = eligibleBatches.find(item => item.id === id);
-    if (!batch) { setSoldQuantities({}); return; }
-    setSoldQuantities(Object.fromEntries((batch.items ?? [])
+    if (!batch) { setWasteQuantities({}); return; }
+    setWasteQuantities(Object.fromEntries((batch.items ?? [])
       .filter(item => item.status === "completed_harvested" || item.status === "failed")
-      .map(item => [item.id, Math.max(0, Number(item.soldQuantityGrams ?? 0))])));
+      .map(item => [item.id, 0])));
   }
-  async function saveSoldQuantity() {
+  async function saveReconciliation() {
     if (!user || !selectedBatch) return;
     const confirmed = await confirmAction({
-      title: "Update sold quantity?",
-      text: `This will update the sold quantity for ${selectedBatch.batchNumber}. Batch stock will not be changed.`,
-      confirmText: "Update Sold Quantity",
+      title: "Update batch reconciliation?",
+      text: `This will deduct the entered Waste from Product stock and batch Stock, record an Adjustment History entry, and refresh the reconciliation. Sold Quantity is calculated from completed fulfilment and cannot be edited here.`,
+      confirmText: "Update Reconciliation",
     });
     if (!confirmed) return;
     setSavingBatch(true); setError("");
     try {
-      await updateGrowingBatchSoldQuantity(selectedBatch, soldQuantities, user.uid, user.email ?? undefined);
-      showToast(`${selectedBatch.batchNumber} sold quantity updated successfully.`);
+      await updateGrowingBatchSoldQuantity(selectedBatch, user.uid, user.email ?? undefined, wasteQuantities);
+      showToast(`${selectedBatch.batchNumber} reconciliation updated successfully.`);
       await load();
       const refreshed = (await listCollection<GrowingBatch>("growingBatches")).find(batch => batch.id === selectedBatch.id);
       if (refreshed) {
         setSelectedBatchId(refreshed.id);
-        setSoldQuantities(Object.fromEntries((refreshed.items ?? [])
+        setWasteQuantities(Object.fromEntries((refreshed.items ?? [])
           .filter(item => item.status === "completed_harvested" || item.status === "failed")
-          .map(item => [item.id, Math.max(0, Number(item.soldQuantityGrams ?? 0))])));
+          .map(item => [item.id, 0])));
       }
-    } catch (e) { await showError(e, "Unable to update sold quantity."); }
+    } catch (e) {
+      console.error("[WASTE-DEBUG] UI UPDATE FAILED", {
+        batchId: selectedBatch.id,
+        batchNumber: selectedBatch.batchNumber,
+        wasteQuantities,
+        error: e,
+        errorMessage: e instanceof Error ? e.message : String(e),
+        errorStack: e instanceof Error ? e.stack : undefined,
+      });
+      const detail = e instanceof Error ? e.message : String(e);
+      await showError(e, `Unable to update batch reconciliation.
+
+${detail}`);
+    }
     finally { setSavingBatch(false); }
   }
 
   async function closeBatch() {
     if (!user || !selectedBatch) return;
     const confirmed = await confirmAction({
-      title: "Close this batch?",
-      text: "Closing this batch will set each microgreen's batch stock to its sold quantity and make the batch unavailable for further selling. Are you sure you want to close it?",
+      title: "Close Batch — Irreversible Action",
+      text: "Any remaining Stock for all harvested microgreens will be automatically adjusted as Waste, Product stock will be reduced accordingly, and the batch will be closed. Once closed, this batch will no longer be available for selling. This action is irreversible. Are you sure you want to continue?",
       confirmText: "Close Batch",
       cancelText: "Cancel",
       icon: "warning",
@@ -96,10 +109,10 @@ export default function InventoryPage() {
     if (!confirmed) return;
     setClosingBatch(true); setError("");
     try {
-      await closeGrowingBatchFromInventory(selectedBatch, user.uid, user.email ?? undefined);
+      await closeGrowingBatchFromInventory(selectedBatch, user.uid, user.email ?? undefined, wasteQuantities);
       showToast(`${selectedBatch.batchNumber} closed successfully.`);
       setSelectedBatchId("");
-      setSoldQuantities({});
+      setWasteQuantities({});
       await load();
     } catch (e) { await showError(e, "Unable to close batch."); }
     finally { setClosingBatch(false); }
@@ -130,23 +143,35 @@ export default function InventoryPage() {
             </div>
           </div>
           {selectedBatch && <div className="mt-4">
-            <div className="alert alert-info small mb-3"><strong>{selectedBatch.batchNumber}</strong> · Started {selectedBatch.startDate} · {selectedBatch.locationName || "No location"}. Edit only the <strong>Sold Quantity</strong>. Batch Stock is read-only here. Closing the batch reconciles Batch Stock to Sold Quantity.</div>
-            <div className="table-responsive"><table className="table table-sm align-middle mb-3"><thead><tr><th>Microgreen</th><th>Actual harvested</th><th>Actual loss</th><th>Actual usable</th><th>Batch stock</th><th style={{width:180}}>Sold quantity (gms)</th></tr></thead><tbody>
+            <div className="alert alert-info small mb-3"><strong>{selectedBatch.batchNumber}</strong> · Started {selectedBatch.startDate} · {selectedBatch.locationName || "No location"}. <strong>Harvested</strong> is the usable harvest after production loss. Sold Quantity, Stock and Total Waste are read-only; Waste Adjustment is the only editable reconciliation value. Waste Adjustment starts at 0g. Waste is an incremental adjustment: each Update deducts the entered Waste from Stock and Product stock. A batch can be closed when <strong>Stock reaches 0</strong>.</div>
+            <div className="table-responsive"><table className="table table-sm align-middle mb-3"><thead><tr><th>Microgreen</th><th>Harvested</th><th>Loss</th><th>Stock</th><th style={{width:180}}>Sold quantity (gms)</th><th style={{width:160}}>Waste adjustment (gms)</th><th style={{width:140}}>Total Waste (gms)</th></tr></thead><tbody>
               {selectedBatchItems.map(item => {
-                const batchStock = Math.max(0, Number(item.batchStockGrams ?? item.actualYieldGrams ?? 0));
-                const sold = Math.max(0, Number(soldQuantities[item.id] ?? item.soldQuantityGrams ?? 0));
+                const harvested = Math.max(0, Number(item.actualYieldGrams ?? 0));
+                const batchStock = Math.max(0, Number(item.batchStockGrams ?? harvested - Number(item.soldQuantityGrams ?? 0)));
+                const sold = Math.max(0, Number(item.soldQuantityGrams ?? 0));
+                const waste = Math.max(0, Number(wasteQuantities[item.id] ?? 0));
+                const wasteAdjustments = selectedBatchAdjustments.filter(adjustment =>
+                  adjustment.type === "batch_waste" &&
+                  (adjustment.isWaste === true || adjustment.type === "batch_waste") &&
+                  adjustment.productId === item.productId
+                );
+                const hasWasteAdjustment = wasteAdjustments.length > 0;
+                const totalWaste = hasWasteAdjustment
+                  ? wasteAdjustments.reduce((sum, adjustment) => sum + Math.max(0, Number(adjustment.quantity ?? 0)), 0)
+                  : batchStock;
                 return <tr key={item.id}>
                   <td><strong>{item.productName}</strong></td>
-                  <td>{Number(item.actualHarvestGrams ?? 0).toLocaleString()} gms</td>
+                  <td>{harvested.toLocaleString()} gms</td>
                   <td>{Number(item.wastageGrams ?? 0).toLocaleString()} gms</td>
-                  <td>{Number(item.actualYieldGrams ?? 0).toLocaleString()} gms</td>
                   <td><strong>{batchStock.toLocaleString()} gms</strong></td>
-                  <td><input className="form-control form-control-sm" type="number" min="0" max={Number(item.actualYieldGrams ?? 0)} step="1" value={sold} onChange={e => setSoldQuantities(v => ({...v, [item.id]: Math.max(0, Number(e.target.value) || 0)}))}/></td>
+                  <td><input className="form-control form-control-sm" type="number" value={sold} readOnly aria-label={`Sold quantity for ${item.productName}`}/></td>
+                  <td><input className="form-control form-control-sm" type="number" min="0" max={batchStock} step="1" value={waste} onChange={e => setWasteQuantities(v => ({...v, [item.id]: Math.max(0, Number(e.target.value) || 0)}))}/></td>
+                  <td><input className="form-control form-control-sm" type="number" value={totalWaste} readOnly aria-label={`Total waste for ${item.productName}`}/></td>
                 </tr>;
               })}
             </tbody></table></div>
             <div className="d-flex justify-content-end gap-2">
-              <button type="button" className="btn btn-outline-primary" disabled={savingBatch || closingBatch} onClick={() => void saveSoldQuantity()}>{savingBatch ? "Updating..." : "Update Sold Quantity"}</button>
+              <button type="button" className="btn btn-outline-primary" disabled={savingBatch || closingBatch} onClick={() => void saveReconciliation()}>{savingBatch ? "Updating..." : "Update Reconciliation"}</button>
               <button type="button" className="btn btn-danger" disabled={savingBatch || closingBatch} onClick={() => void closeBatch()}>{closingBatch ? "Closing..." : "Close Batch"}</button>
             </div>
           </div>}

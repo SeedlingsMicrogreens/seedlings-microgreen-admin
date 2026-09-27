@@ -15,7 +15,9 @@ function numberValue(value: unknown) {
 }
 
 function requiredItemGrams(item: OrderItem) {
-  return Math.max(0, Math.round(numberValue(item.weightGrams) * numberValue(item.quantity)));
+  // Order `weightGrams` is already the total weight for the order line
+  // (packaging size × quantity). Do not multiply by quantity again.
+  return Math.max(0, Math.round(numberValue(item.weightGrams)));
 }
 
 function componentGramsPerBox(salable: SalesProduct, boxGrams: number) {

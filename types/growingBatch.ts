@@ -60,6 +60,8 @@ export type GrowingBatchItem = {
   notes?: string;
   /** Remaining grams available from this harvested batch item for fulfilment. */
   batchStockGrams?: number;
+  /** Grams intentionally wasted when reconciling the remaining batch stock at close. */
+  batchWasteGrams?: number;
 };
 
 export type GrowingBatch = {

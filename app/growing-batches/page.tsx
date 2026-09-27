@@ -332,7 +332,7 @@ function BatchList({ batches, loading, onView }: {
         <thead><tr>
           <th>Batch</th><th>Microgreens</th><th>Location</th><th>Harvest Date</th><th>Planned</th>
           {activeTab === "active" && <><th>Sold</th><th>Stage</th></>}
-          <th>Harvested</th><th>Status</th><th className="text-end">Action</th>
+          <th>Harvested</th><th>{activeTab === "closed" ? "Waste (gms)" : "Status"}</th><th className="text-end">Action</th>
         </tr></thead>
         <tbody>
           {visibleBatches.map(batch => {
@@ -340,6 +340,7 @@ function BatchList({ batches, loading, onView }: {
               const planned = batch.items.reduce((n, i) => n + Number(i.expectedYieldGrams ?? 0), 0);
               const sold = batch.items.reduce((n, i) => n + Number(i.soldQuantityGrams ?? 0), 0);
               const harvested = batch.items.reduce((n, i) => n + Number(i.actualYieldGrams ?? 0), 0);
+              const waste = batch.items.reduce((n, i) => n + Math.max(0, Number(i.batchWasteGrams ?? 0)), 0);
               return <tr key={batch.id}>
                 <td><strong>{batch.batchNumber}</strong></td>
                 <td>{batch.items.map(i => <span className="badge text-bg-light me-1" key={i.id}>{i.productName} · {i.trayCount} trays</span>)}</td>
@@ -348,7 +349,7 @@ function BatchList({ batches, loading, onView }: {
                 <td>{planned.toLocaleString()} gms</td>
                 <td>{sold.toLocaleString()} gms</td>
                 <td>{harvested.toLocaleString()} gms</td>
-                <td><span className="badge text-bg-secondary">Closed</span></td>
+                <td><strong>{waste.toLocaleString()} gms</strong></td>
                 <td className="text-end"><button className="btn btn-sm btn-outline-primary" onClick={() => onView(batch)}>
                   <i className="bi bi-eye me-1" />View Details
                 </button></td>
@@ -752,7 +753,7 @@ function BatchDetails({ batch, products, locations, uid, email, onBack, onSaved,
       <div className="card-header"><h3 className="card-title mb-0">Microgreens Status</h3></div>
       <div className="table-responsive"><table className="table table-hover align-middle mb-0">
         <thead><tr>
-          <th>Microgreen</th><th>Trays</th><th>Soaking</th><th>Dark Period</th><th>Light Period</th><th>Planned</th><th>Sold</th><th>Actual Loss</th><th>Actual Harvested</th><th>Status</th>
+          <th>Microgreen</th><th>Trays</th><th>Soaking</th><th>Dark Period</th><th>Light Period</th><th>Planned</th><th>Sold</th><th>Actual Loss</th><th>Actual Harvested</th><th>{batch.status === "closed" ? "Waste (gms)" : "Status"}</th>
         </tr></thead>
         <tbody>
           {batch.items.map(item => {
@@ -768,7 +769,11 @@ function BatchDetails({ batch, products, locations, uid, email, onBack, onSaved,
               <td>{Number(item.soldQuantityGrams ?? 0).toLocaleString()} gms</td>
               <td>{loss == null ? "—" : `${loss.toLocaleString()} gms`}</td>
               <td>{item.actualYieldGrams == null ? "—" : `${item.actualYieldGrams.toLocaleString()} gms`}</td>
-              <td><span className={`badge text-bg-${item.status === "completed_harvested" ? "success" : item.status === "in_progress" ? "warning" : "secondary"}`}>{item.status === "completed_harvested" ? "Completed/Harvested" : statusLabel(item.status)}</span></td>
+              {batch.status === "closed" ? (
+                <td>{Number(item.batchWasteGrams ?? 0).toLocaleString()} gms</td>
+              ) : (
+                <td><span className={`badge text-bg-${item.status === "completed_harvested" ? "success" : item.status === "in_progress" ? "warning" : "secondary"}`}>{item.status === "completed_harvested" ? "Completed/Harvested" : statusLabel(item.status)}</span></td>
+              )}
             </tr>;
           })}
         </tbody>
@@ -782,7 +787,7 @@ function BatchDetails({ batch, products, locations, uid, email, onBack, onSaved,
       <span><span className="rounded-circle bg-success d-inline-block me-1" style={{ width: 10, height: 10 }} />Completed</span>
     </div>
 
-    {allPhasesCompleted && !harvestingOpen && batch.status !== "completed_harvested" && <div className="d-flex justify-content-center mt-3">
+    {batch.status !== "closed" && allPhasesCompleted && !harvestingOpen && batch.status !== "completed_harvested" && <div className="d-flex justify-content-center mt-3">
       <button type="button" className="btn btn-success px-4" disabled={savingPhase !== null || harvesting} onClick={openHarvest}>
         <i className="bi bi-basket2 me-1" />Harvest
       </button>
@@ -791,7 +796,7 @@ function BatchDetails({ batch, products, locations, uid, email, onBack, onSaved,
     {harvestingOpen && <div className="card border-success mt-3">
       <div className="card-header"><h3 className="card-title mb-0">Harvest</h3></div>
       <div className="card-body">
-        <div className="alert alert-info mb-3">Actual Harvested is pre-filled as <strong>Expected − Expected Loss</strong>. Change it only when the actual harvest differs; Loss is calculated automatically as <strong>Expected − Actual Harvested</strong>.</div>
+        <div className="alert alert-info mb-3">Actual Harvested is pre-filled using the planned Expected quantity and Expected Loss. Expected is a reference only; Actual Harvested may be greater than Expected. Loss is calculated only when Actual Harvested is below Expected.</div>
         <div className="table-responsive">
           <table className="table table-sm align-middle mb-0">
             <thead><tr><th>Microgreen</th><th>Expected</th><th>Actual Harvested</th><th>Loss</th></tr></thead>
@@ -803,7 +808,7 @@ function BatchDetails({ batch, products, locations, uid, email, onBack, onSaved,
                 return <tr key={item.id}>
                   <td><strong>{item.productName}</strong></td>
                   <td>{expected.toLocaleString()} gms</td>
-                  <td style={{ maxWidth: 220 }}><input className="form-control" type="number" min="0" max={expected} step="1" value={value} onChange={e => setHarvestValues(prev => ({ ...prev, [item.id]: Number(e.target.value) }))} /></td>
+                  <td style={{ maxWidth: 220 }}><input className="form-control" type="number" min="0" step="1" value={value} onChange={e => setHarvestValues(prev => ({ ...prev, [item.id]: Number(e.target.value) }))} /></td>
                   <td>{loss.toLocaleString()} gms</td>
                 </tr>;
               })}

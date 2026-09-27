@@ -1,3 +1,34 @@
+## Closed Batch — Harvest action visibility
+- The Harvest button is now hidden when viewing a closed batch.
+- Closed batches remain view-only and cannot start another harvest operation.
+
+## Closed Batch Detail — Per-Microgreen Waste Display
+
+- In the Closed Batch detail view, replaced the per-microgreen Status column with **Waste (gms)**.
+- Closed batches now show the recorded `batchWasteGrams` for each microgreen so the waste quantity can be reconciled individually.
+- Active batch details continue to show the existing Status column.
+
+
+## Closed Batches — Waste Display
+
+- Removed the Status column from the Closed Batches list because all rows in that tab are already closed.
+- Added a Waste (gms) column showing the cumulative `batchWasteGrams` across all microgreens in each closed batch.
+- Active Batches continue to show their existing Status column.
+
+## Fulfilment packing weight fix — Phase 47 baseline
+
+- Fixed pending packing requirements to treat an order item's `weightGrams` as the **total line weight** already calculated from packaging size × box quantity.
+- Removed the duplicate multiplication by `quantity` in the Fulfilment UI and packing service.
+- Example: a 100g packaging ordered with quantity 2 and `weightGrams: 200` now shows **200 gms required / 200 gms pending**, not 400 gms.
+- Packing box validation and inventory deduction continue to use the actual total grams required by the order line.
+
+
+## Batch Close — Irreversible Confirmation
+
+- Updated the Close Batch confirmation to clearly state that all remaining Stock for harvested Microgreens will be automatically recorded as Waste.
+- The confirmation now states that the batch will no longer be available for selling after closure.
+- The confirmation explicitly warns that closing a batch is an irreversible action.
+
 # Seedlings Admin — Consolidated Changelog
 
 This file replaces the previous collection of phase-specific Markdown notes. It keeps the useful historical context without maintaining dozens of competing documentation files.
@@ -307,3 +338,62 @@ Future small fixes should normally update `CHANGELOG.md` rather than creating an
 - YouTube feedback accepts a normal YouTube URL; the admin UI extracts/stores the video ID and uses the YouTube embed URL for preview. Embed/iframe HTML is not accepted.
 - Added draft/published status and display order, with edit/delete support.
 - Added Firestore access rule for `seedlingsFeedback` and `websiteJourneyContent`.
+
+## Phase 47 — Actual Harvest Can Exceed Expected Yield
+- Removed the validation that prevented Actual Harvested quantity from being greater than Expected Yield.
+- Expected Yield remains a production reference/planned quantity only.
+- Actual Harvested may exceed Expected because microgreen growth can produce more grams than the planned estimate.
+- Removed the UI maximum tied to Expected Yield so admins can enter the actual harvested quantity.
+- Loss remains calculated only when Actual Harvested is below Expected; when Actual Harvested exceeds Expected, loss is 0.
+- No changes to inventory posting, batch lifecycle, or existing harvest transaction logic beyond allowing the actual quantity to exceed the reference quantity.
+## Inventory Batch Reconciliation Update
+- Inventory batch table columns are now ordered: Microgreen, Harvested, Loss, Stock, Sold Quantity (gms), Waste (gms).
+- Added batch-level Waste as a reconciliation field separate from production Loss.
+- Waste is an incremental reconciliation adjustment. Each Update deducts the entered waste grams from Product stock and batch Stock and records a batch_waste adjustment; the batch can be closed only after remaining Stock reaches 0.
+### Inventory Batch Reconciliation — Sold Quantity Read-only / Waste Editable
+- Sold Quantity is now read-only in Inventory and remains system-controlled from completed fulfilment/handover records.
+- Stock remains read-only and is used to initialise the Waste field with the remaining batch stock.
+- Waste is the only editable reconciliation value.
+- Server-side reconciliation and batch closing now always read Sold Quantity from the latest Firestore batch, preventing manual Sold Quantity edits.
+- Waste adjustments are incremental. Each Update reduces remaining batch Stock and Product stock and creates an Adjustment History entry; Close Batch requires remaining Stock to be 0 and does not deduct stock again.
+
+### Batch Waste Product Stock Deduction Fix
+
+- Closing a harvested batch now explicitly deducts reconciled Waste (remaining batch stock) from the aggregate Product `stockGrams`/`stock` in the same Firestore transaction.
+- Sold Quantity remains read-only and is already deducted at packing; Waste is the final inventory deduction at batch close.
+- A `batch_waste` inventory adjustment records previous stock, waste quantity, and new stock.
+
+- Fixed waste adjustment history transaction: use the known batch document id instead of `latest.id`, which is not present in Firestore snapshot data.
+
+## Phase 47 — Total Waste Display
+- Added readonly **Total Waste (gms)** to Inventory batch reconciliation.
+- Waste Adjustment remains the incremental editable value.
+- Total Waste is cumulative: previous total + current adjustment.
+- Batch close preserves the cumulative Total Waste value.
+
+- Total Waste display now uses explicit `batch_waste`/`isWaste` adjustment history: before the first waste adjustment it shows the initial remaining Stock; after adjustments it shows cumulative waste only. New waste adjustment records set `isWaste: true`.
+- Fixed waste-adjustment history query to use the actual growing batch document ID (`batch.id`) instead of `latest.id` from Firestore document data, preventing `where()` from receiving `undefined`.
+
+## Phase 47 bugfix — Waste adjustment reference safety
+- Added explicit validation for batch and product references before creating Firestore document references.
+- Waste adjustment history no longer attempts to create a reference from an undefined batch item/product ID.
+- Optional `growingBatchItemId` is only written when a valid batch item ID exists.
+
+## Waste Reconciliation Transaction Fix
+- Fixed Firestore waste reconciliation failure caused by calling `transaction.get()` with an `inventoryAdjustments` query.
+- Waste history is now read with `getDocs()` before the transaction; the transaction uses document reads only.
+- Product document reads are performed sequentially through the transaction to keep transaction reads explicit and deterministic.
+
+
+### Batch Close — Automatic Final Waste Reconciliation
+- Close Batch now automatically converts all remaining batch Stock for every harvested microgreen into Waste.
+- Remaining Stock is set to 0g and cumulative Total Waste is increased accordingly for each batch item.
+- Aggregate Product stock is reduced by the automatically created waste quantity.
+- A `batch_waste` inventory adjustment is recorded for the final waste deduction.
+- The batch is then marked closed.
+- Update Reconciliation already records entered Waste incrementally: each update reduces batch Stock and Product stock and creates a `batch_waste` history record.
+
+### 2026-09-27 — Typecheck cleanup
+- Removed stray waste-debug references accidentally left in unrelated growing-batch functions.
+- Removed an invalid debug payload referencing out-of-scope waste variables from the harvest inventory adjustment path.
+- Waste reconciliation debug logging remains scoped only to `updateGrowingBatchSoldQuantity`.

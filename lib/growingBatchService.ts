@@ -1,4 +1,4 @@
-import { collection, doc, runTransaction, serverTimestamp, type Transaction, type DocumentReference } from "firebase/firestore";
+import { collection, doc, getDocs, query, where, runTransaction, serverTimestamp, type Transaction, type DocumentReference, type DocumentSnapshot } from "firebase/firestore";
 import { db } from "./firebase";
 import { auditEvent } from "./firestore";
 import type { Product } from "@/types/catalog";
@@ -331,10 +331,6 @@ export async function harvestGrowingBatch(
     if (!Number.isInteger(actual) || actual < 0) {
       throw new Error(`Actual harvested quantity for ${item.productName} must be a whole number of grams.`);
     }
-    const expected = Number(item.expectedYieldGrams ?? 0);
-    if (actual > expected) {
-      throw new Error(`Actual harvested quantity for ${item.productName} cannot be greater than Expected (${expected.toLocaleString()} gms).`);
-    }
   }
 
   await runTransaction(db, async transaction => {
@@ -476,53 +472,174 @@ export async function harvestGrowingBatchItem(
  */
 export async function updateGrowingBatchSoldQuantity(
   batch: GrowingBatch,
-  soldQuantities: Record<string, number>,
   uid: string,
   email?: string,
+  wasteQuantities: Record<string, number> = {},
 ) {
+  const debug = (step: string, details: Record<string, unknown> = {}) => {
+    console.error("[WASTE-DEBUG]", step, { batchId: batch?.id, batchNumber: batch?.batchNumber, ...details });
+  };
+  debug("START", { uid, wasteQuantities });
   if (batch.delivered || batch.status === "closed") {
     throw new Error("This batch is already closed.");
   }
 
-  const selectedItems = (batch.items ?? []).filter(
-    item => item.status === "completed_harvested" || item.status === "failed",
-  );
-  if (!selectedItems.length) throw new Error("This batch has no harvested items.");
-
-  for (const item of selectedItems) {
-    const value = Number(soldQuantities[item.id] ?? 0);
-    const harvested = Math.max(0, Math.round(Number(item.actualYieldGrams ?? 0)));
-    if (!Number.isInteger(value) || value < 0) {
-      throw new Error(`Sold quantity for ${item.productName} must be a whole number of grams and cannot be negative.`);
-    }
-    if (value > harvested) {
-      throw new Error(`Sold quantity for ${item.productName} cannot exceed actual usable quantity of ${harvested.toLocaleString()}g.`);
-    }
-  }
-
+  if (!batch.id) { debug("VALIDATION_FAILED", { reason: "missing batch.id" }); throw new Error("Growing batch ID is missing. Refresh and select the batch again."); }
+  debug("BATCH_REF", { batchId: batch.id });
   const batchRef = doc(db, "growingBatches", batch.id);
-  await runTransaction(db, async transaction => {
+
+  // Firestore Web transactions support document reads, not query reads.
+  // Fetch existing waste history before starting the transaction so the
+  // transaction only performs transaction-safe document reads/writes.
+  debug("WASTE_HISTORY_QUERY", { growingBatchId: batch.id });
+  const wasteQuery = query(
+    collection(db, "inventoryAdjustments"),
+    where("growingBatchId", "==", batch.id),
+  );
+  const wasteAdjustmentsSnapshot = await getDocs(wasteQuery);
+  debug("WASTE_HISTORY_READ", { count: wasteAdjustmentsSnapshot.size });
+  const cumulativeWasteByProductId = new Map<string, number>();
+  wasteAdjustmentsSnapshot.forEach(adjustment => {
+    const data = adjustment.data();
+    if (data.isWaste === true || data.type === "batch_waste") {
+      const productId = String(data.productId ?? "");
+      if (productId) {
+        cumulativeWasteByProductId.set(
+          productId,
+          (cumulativeWasteByProductId.get(productId) ?? 0) + Math.max(0, Math.round(Number(data.quantity ?? 0))),
+        );
+      }
+    }
+  });
+
+  try {
+    await runTransaction(db, async transaction => {
+      debug("TRANSACTION_START", { batchRefPath: batchRef.path });
     const snapshot = await transaction.get(batchRef);
     if (!snapshot.exists()) throw new Error("Growing batch no longer exists.");
     const latest = snapshot.data() as GrowingBatch;
-    if (latest.delivered || latest.status === "closed") throw new Error("This batch was already closed. Refresh and try again.");
+    if (latest.delivered || latest.status === "closed") {
+      throw new Error("This batch was already closed. Refresh and try again.");
+    }
 
+    const harvestedItems = (latest.items ?? []).filter(
+      item => item.status === "completed_harvested" || item.status === "failed",
+    );
+    if (!harvestedItems.length) throw new Error("This batch has no harvested items.");
+
+    const invalidItem = harvestedItems.find(item => !item.id || !item.productId);
+    if (invalidItem) {
+      throw new Error(`${invalidItem.productName || "A batch item"} is missing its product reference. Refresh the batch and retry.`);
+    }
+    const productIds = [...new Set(harvestedItems.map(item => item.productId).filter((id): id is string => Boolean(id)))];
+    debug("PRODUCT_IDS", { productIds, harvestedItems: harvestedItems.map(item => ({ id: item.id, productId: item.productId, productName: item.productName })) });
+    if (!productIds.length) throw new Error("No product references were found for this batch. Refresh and retry.");
+    const productRefs = productIds.map(id => {
+      if (!id) throw new Error("Invalid empty product ID while creating Product reference.");
+      const ref = doc(db, "products", id);
+      debug("PRODUCT_REF", { productId: id, path: ref.path });
+      return ref;
+    });
+    const productSnaps: DocumentSnapshot[] = [];
+    for (const ref of productRefs) {
+      productSnaps.push(await transaction.get(ref));
+    }
+    if (productSnaps.some(snap => !snap.exists())) {
+      throw new Error("One or more production products no longer exist. Refresh and retry.");
+    }
+
+    const productStates = new Map(productIds.map((id, index) => [id, {
+      ref: productRefs[index],
+      product: productSnaps[index].data() as Product,
+      previous: Number(productSnaps[index].data()?.stockGrams ?? productSnaps[index].data()?.stock ?? 0),
+    }]));
+
+    const wasteByProductId = new Map<string, number>();
     const updatedItems = (latest.items ?? []).map(item => {
-      if (!selectedItems.some(selected => selected.id === item.id)) return item;
+      if (!harvestedItems.some(selected => selected.id === item.id)) return item;
+
+      const harvested = Math.max(0, Math.round(Number(item.actualYieldGrams ?? 0)));
+      const sold = Math.max(0, Math.round(Number(item.soldQuantityGrams ?? 0)));
+      const currentStock = Math.max(0, Math.round(Number(item.batchStockGrams ?? Math.max(0, harvested - sold))));
+      const enteredWaste = Number(wasteQuantities[item.id] ?? 0);
+
+      if (!Number.isInteger(enteredWaste) || enteredWaste < 0) {
+        throw new Error(`Waste adjustment for ${item.productName} must be a whole number of grams and cannot be negative.`);
+      }
+      if (enteredWaste > currentStock) {
+        throw new Error(`${item.productName}: Waste adjustment (${enteredWaste}g) cannot exceed remaining Stock (${currentStock}g).`);
+      }
+
+      if (enteredWaste > 0) {
+        wasteByProductId.set(item.productId, (wasteByProductId.get(item.productId) ?? 0) + enteredWaste);
+      }
+
+      const previousTotalWaste = cumulativeWasteByProductId.get(item.productId) ?? 0;
+      const nextTotalWaste = previousTotalWaste + enteredWaste;
+
       return {
         ...item,
-        soldQuantityGrams: Math.max(0, Math.round(Number(soldQuantities[item.id] ?? 0))),
+        soldQuantityGrams: sold,
+        batchStockGrams: currentStock - enteredWaste,
+        // Cumulative waste adjusted for this batch item.
+        batchWasteGrams: nextTotalWaste,
       };
     });
 
+    for (const [productId, enteredWaste] of wasteByProductId) {
+      const state = productStates.get(productId);
+      if (!state) throw new Error(`Product ${productId} is missing.`);
+      const nextStock = state.previous - enteredWaste;
+      if (nextStock < 0) {
+        throw new Error(`${state.product.name}: this waste adjustment would make aggregate stock negative.`);
+      }
+
+      transaction.update(state.ref, {
+        stockGrams: nextStock,
+        stock: nextStock,
+        status: nextStock === 0 && state.product.status === "active"
+          ? "out_of_stock"
+          : state.product.status === "out_of_stock" && nextStock > 0
+            ? "active"
+            : state.product.status,
+        updatedAt: serverTimestamp(),
+      });
+
+      const adjustmentRef = doc(collection(db, "inventoryAdjustments"));
+      const batchItemForProduct = harvestedItems.find(item => item.productId === productId);
+      transaction.set(adjustmentRef, {
+        productId,
+        productName: state.product.name,
+        type: "batch_waste",
+        quantity: enteredWaste,
+        unit: "g",
+        previousStock: state.previous,
+        newStock: nextStock,
+        reason: `Waste adjusted for batch ${latest.batchNumber}.`,
+        growingBatchId: batch.id,
+        ...(batchItemForProduct?.id ? { growingBatchItemId: batchItemForProduct.id } : {}),
+        isWaste: true,
+        createdByUid: uid,
+        createdByEmail: email ?? "",
+        createdAt: serverTimestamp(),
+      });
+    }
+
+    debug("BATCH_UPDATE", { path: batchRef.path, updatedItems: updatedItems.map(item => ({ id: item.id, productId: item.productId, stock: item.batchStockGrams, waste: item.batchWasteGrams })) });
     transaction.update(batchRef, { items: updatedItems, updatedAt: serverTimestamp() });
+    debug("TRANSACTION_CALLBACK_COMPLETE");
   });
+    debug("TRANSACTION_COMMITTED");
+  } catch (error) {
+    debug("FAILED", { errorName: error instanceof Error ? error.name : typeof error, errorMessage: error instanceof Error ? error.message : String(error), errorStack: error instanceof Error ? error.stack : undefined });
+    throw error;
+  }
 
   await auditEvent(
-    "batch_sold_quantity_adjustment",
+    "batch_reconciliation_adjustment",
     "growingBatches",
     batch.id,
-    `Updated sold quantity for ${batch.batchNumber}`,
+    `Adjusted waste for ${batch.batchNumber}; entered waste was deducted from Product stock and recorded in Adjustment History.`,
   );
 }
 
@@ -536,95 +653,119 @@ export async function closeGrowingBatchFromInventory(
   batch: GrowingBatch,
   uid: string,
   email?: string,
+  _wasteQuantities: Record<string, number> = {},
 ) {
   if (batch.delivered || batch.status === "closed") {
     throw new Error("This batch is already closed.");
   }
-
-  const selectedItems = (batch.items ?? []).filter(
-    item => item.status === "completed_harvested" || item.status === "failed",
-  );
-  if (!selectedItems.length) throw new Error("This batch has no harvested items to close.");
+  if (!batch.id) throw new Error("Growing batch ID is missing. Refresh and select the batch again.");
 
   const batchRef = doc(db, "growingBatches", batch.id);
+
+  // Waste history is read outside the transaction because Firestore Web
+  // transactions support document reads, not query reads. This history is
+  // used only to preserve cumulative Total Waste per batch item/product.
+  const wasteQuery = query(
+    collection(db, "inventoryAdjustments"),
+    where("growingBatchId", "==", batch.id),
+  );
+  const wasteHistorySnapshot = await getDocs(wasteQuery);
+  const cumulativeWasteByProductId = new Map<string, number>();
+  wasteHistorySnapshot.forEach(adjustment => {
+    const data = adjustment.data();
+    if (data.isWaste === true || data.type === "batch_waste") {
+      const productId = String(data.productId ?? "");
+      if (productId) {
+        cumulativeWasteByProductId.set(
+          productId,
+          (cumulativeWasteByProductId.get(productId) ?? 0) + Math.max(0, Math.round(Number(data.quantity ?? 0))),
+        );
+      }
+    }
+  });
 
   await runTransaction(db, async transaction => {
     const snapshot = await transaction.get(batchRef);
     if (!snapshot.exists()) throw new Error("Growing batch no longer exists.");
     const latest = snapshot.data() as GrowingBatch;
-    if (latest.delivered || latest.status === "closed") throw new Error("This batch was already closed. Refresh and try again.");
+    if (latest.delivered || latest.status === "closed") {
+      throw new Error("This batch was already closed. Refresh and retry.");
+    }
 
-    const latestItems = latest.items ?? [];
-    const harvestedItems = latestItems.filter(
+    const harvestedItems = (latest.items ?? []).filter(
       item => item.status === "completed_harvested" || item.status === "failed",
     );
     if (!harvestedItems.length) throw new Error("This batch has no harvested items to close.");
 
-    const productIds = [...new Set(harvestedItems.map(item => item.productId))];
-    const productRefs = productIds.map(id => doc(db, "products", id));
-    const productSnaps = await Promise.all(productRefs.map(ref => transaction.get(ref)));
-    if (productSnaps.some(snap => !snap.exists())) {
-      throw new Error("One or more production products no longer exist. Refresh and retry.");
-    }
-
-    const productStates = new Map(productIds.map((id, index) => [id, {
-      ref: productRefs[index],
-      product: productSnaps[index].data() as Product,
-      previous: Number(productSnaps[index].data()?.stockGrams ?? productSnaps[index].data()?.stock ?? 0),
-    }]));
-
-    const updatedItems = latestItems.map(item => {
+    // Close Batch is the final reconciliation action: whatever Stock remains
+    // for every harvested microgreen is automatically treated as Waste.
+    const wasteByProductId = new Map<string, number>();
+    const updatedItems = (latest.items ?? []).map(item => {
       if (!harvestedItems.some(selected => selected.id === item.id)) return item;
-      const sold = Math.max(0, Math.round(Number(item.soldQuantityGrams ?? 0)));
-      return { ...item, batchStockGrams: sold };
+
+      const currentStock = Math.max(0, Math.round(Number(item.batchStockGrams ?? 0)));
+      const previousWaste = cumulativeWasteByProductId.get(item.productId) ?? 0;
+      const finalWaste = previousWaste + currentStock;
+
+      if (currentStock > 0) {
+        wasteByProductId.set(
+          item.productId,
+          (wasteByProductId.get(item.productId) ?? 0) + currentStock,
+        );
+      }
+
+      return {
+        ...item,
+        batchStockGrams: 0,
+        batchWasteGrams: finalWaste,
+      };
     });
 
-    for (const item of harvestedItems) {
-      const state = productStates.get(item.productId);
-      if (!state) throw new Error(`Product ${item.productName} is missing.`);
-      const currentBatchStock = Math.max(0, Math.round(Number(item.batchStockGrams ?? item.actualYieldGrams ?? 0)));
-      const sold = Math.max(0, Math.round(Number(item.soldQuantityGrams ?? 0)));
-      const delta = sold - currentBatchStock;
-      const nextStock = state.previous + delta;
-      if (nextStock < 0) {
-        throw new Error(`${item.productName}: closing this batch would make aggregate stock negative.`);
-      }
-      state.previous = nextStock;
+    const productIds = [...wasteByProductId.keys()];
+    const productRefs = productIds.map(productId => doc(db, "products", productId));
+    const productSnaps: DocumentSnapshot[] = [];
+    for (const ref of productRefs) {
+      productSnaps.push(await transaction.get(ref));
     }
 
-    for (const state of productStates.values()) {
-      const current = state.product;
-      const affected = harvestedItems.filter(item => item.productId === current.id);
-      const delta = affected.reduce((sum, item) => {
-        const currentBatchStock = Math.max(0, Math.round(Number(item.batchStockGrams ?? item.actualYieldGrams ?? 0)));
-        const sold = Math.max(0, Math.round(Number(item.soldQuantityGrams ?? 0)));
-        return sum + (sold - currentBatchStock);
-      }, 0);
-      const previousStock = state.previous - delta;
-      const nextStock = state.previous;
+    for (let index = 0; index < productIds.length; index += 1) {
+      const productId = productIds[index];
+      const productSnap = productSnaps[index];
+      if (!productSnap.exists()) {
+        throw new Error(`Product ${productId} no longer exists. Refresh and retry.`);
+      }
 
-      transaction.update(state.ref, {
-        stockGrams: nextStock,
-        stock: nextStock,
-        status: nextStock === 0 && current.status === "active"
+      const product = productSnap.data() as Product;
+      const waste = wasteByProductId.get(productId) ?? 0;
+      const previousStock = Math.max(0, Math.round(Number(product.stockGrams ?? product.stock ?? 0)));
+      const newStock = previousStock - waste;
+      if (newStock < 0) {
+        throw new Error(`${product.name}: closing this batch would make aggregate stock negative.`);
+      }
+
+      transaction.update(productRefs[index], {
+        stockGrams: newStock,
+        stock: newStock,
+        status: newStock === 0 && product.status === "active"
           ? "out_of_stock"
-          : current.status === "out_of_stock" && nextStock > 0
+          : product.status === "out_of_stock" && newStock > 0
             ? "active"
-            : current.status,
+            : product.status,
         updatedAt: serverTimestamp(),
       });
 
       const adjustmentRef = doc(collection(db, "inventoryAdjustments"));
       transaction.set(adjustmentRef, {
-        productId: current.id,
-        productName: current.name,
-        type: "batch_close",
-        quantity: Math.abs(delta),
+        productId,
+        productName: product.name,
+        type: "batch_waste",
+        quantity: waste,
         unit: "g",
         previousStock,
-        newStock: nextStock,
-        reason: `Batch closed: ${latest.batchNumber}. Batch stock set to sold quantity.`,
-        growingBatchId: latest.id,
+        newStock,
+        reason: `Remaining stock automatically adjusted as waste while closing batch ${latest.batchNumber}.`,
+        growingBatchId: batch.id,
+        isWaste: true,
         createdByUid: uid,
         createdByEmail: email ?? "",
         createdAt: serverTimestamp(),
@@ -646,7 +787,12 @@ export async function closeGrowingBatchFromInventory(
     });
   });
 
-  await auditEvent("batch_close", "growingBatches", batch.id, `Closed batch ${batch.batchNumber} from Inventory by setting batch stock to sold quantity`);
+  await auditEvent(
+    "batch_close",
+    "growingBatches",
+    batch.id,
+    `Closed batch ${batch.batchNumber}; all remaining batch stock was automatically adjusted as waste.`,
+  );
 }
 
 export async function recordBatchHandoverSalesInTransaction(

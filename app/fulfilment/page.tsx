@@ -28,7 +28,8 @@ function dateValue(value: unknown) {
 }
 
 function requiredGrams(item: OrderItem) {
-  return Math.max(0, Math.round(numberValue(item.weightGrams) * numberValue(item.quantity)));
+  // Order `weightGrams` already contains the total grams for this line.
+  return Math.max(0, Math.round(numberValue(item.weightGrams)));
 }
 
 function packLabel(size: number) {

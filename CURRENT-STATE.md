@@ -92,6 +92,12 @@ Current business/admin collections include:
 - `auditEvents`
 - Website CMS collections such as `cmsPages`, `cmsFaq`, `cmsTestimonials`, `cmsBlogs`, `cmsBanners`, `cmsNavigation`, `cmsSiteSettings`, `websiteTrustPoints`
 
+### Order-line packing weight rule
+
+For customer orders, `OrderItem.weightGrams` is the **total grams for the line** (packaging size × quantity). Fulfilment must use this value directly and must not multiply it by `OrderItem.quantity` again.
+
+Example: 100g packaging × 2 boxes → `weightGrams = 200`; Fulfilment requirement = 200g.
+
 ## 5. Inventory and fulfilment
 
 Inventory is canonical in grams.
@@ -167,3 +173,41 @@ Customer subscriptions are separate from plan masters and store customer-facing 
 - Unmatched Firestore access is denied by the supplied rules.
 - Administrative operations validate authenticated identity.
 - Secrets remain in environment/deployment configuration and are not committed.
+## Inventory Batch Reconciliation Update
+- Inventory batch table columns are now ordered: Microgreen, Harvested, Loss, Stock, Sold Quantity (gms), Waste (gms).
+- Added batch-level Waste as a reconciliation field separate from production Loss.
+- Waste is an incremental reconciliation adjustment. Each Update deducts the entered waste grams from Product stock and batch Stock and records a batch_waste adjustment; the batch can be closed only after remaining Stock reaches 0.
+### Inventory Batch Reconciliation — Sold Quantity Read-only / Waste Editable
+- Sold Quantity is now read-only in Inventory and remains system-controlled from completed fulfilment/handover records.
+- Stock remains read-only and is used to initialise the Waste field with the remaining batch stock.
+- Waste is the only editable reconciliation value.
+- Server-side reconciliation and batch closing now always read Sold Quantity from the latest Firestore batch, preventing manual Sold Quantity edits.
+- Waste adjustments are incremental. Each Update reduces remaining batch Stock and Product stock and creates an Adjustment History entry; Close Batch requires remaining Stock to be 0 and does not deduct stock again.
+
+### Batch Waste Product Stock Deduction Fix
+
+- Closing a harvested batch now explicitly deducts reconciled Waste (remaining batch stock) from the aggregate Product `stockGrams`/`stock` in the same Firestore transaction.
+- Sold Quantity remains read-only and is already deducted at packing; Waste is the final inventory deduction at batch close.
+- A `batch_waste` inventory adjustment records previous stock, waste quantity, and new stock.
+
+- Waste adjustment history now writes `growingBatchId` from the batch reference, preventing undefined Firestore fields.
+
+### Inventory Batch Waste Reconciliation
+- **Waste Adjustment (gms)** is the incremental editable amount for the current update.
+- **Total Waste (gms)** is readonly and cumulative across all waste adjustments for the batch item.
+- Example: 10g adjustment, then 10g adjustment = 20g Total Waste.
+- Batch Stock continues to decrease by each incremental Waste Adjustment.
+- Product aggregate stock and stockGrams are reduced by each incremental Waste Adjustment.
+- Adjustment History records each individual waste adjustment.
+
+- Total Waste display now uses explicit `batch_waste`/`isWaste` adjustment history: before the first waste adjustment it shows the initial remaining Stock; after adjustments it shows cumulative waste only. New waste adjustment records set `isWaste: true`.
+- Fixed waste-adjustment history query to use the actual growing batch document ID (`batch.id`) instead of `latest.id` from Firestore document data, preventing `where()` from receiving `undefined`.
+
+### Latest Phase 47 bugfix
+- Waste adjustment flow validates required batch/product IDs before Firestore document references are created.
+- Waste adjustment history writes `growingBatchItemId` only when available.
+
+### Latest Phase 47 Waste Transaction Fix
+- Root cause identified for `Cannot read properties of undefined (reading 'path')`: `transaction.get()` was being called with an `inventoryAdjustments` Query. The Firestore Web SDK transaction path expects a document reference for this operation.
+- Waste history is now fetched with `getDocs()` before the transaction.
+- Product documents continue to be read through transaction document references, then Product stock, batch Stock, and waste adjustment history are written atomically.

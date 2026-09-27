@@ -68,7 +68,7 @@ export type ProductSellingOption = {
   active: boolean;
 };
 
-export type InventoryAdjustmentType = "harvest" | "legacy" | "packaging" | "receive" | "add" | "remove" | "batch_stock" | "batch_close" | "fulfilment";
+export type InventoryAdjustmentType = "harvest" | "legacy" | "packaging" | "receive" | "add" | "remove" | "batch_stock" | "batch_close" | "fulfilment" | "batch_waste";
 
 export type InventoryAdjustment = {
   id: string;
@@ -85,5 +85,7 @@ export type InventoryAdjustment = {
   wastageGrams?: number;
   growingBatchId?: string;
   growingBatchItemId?: string;
+  /** True when this adjustment is an incremental waste reconciliation entry. */
+  isWaste?: boolean;
   createdAt?: unknown;
 };
