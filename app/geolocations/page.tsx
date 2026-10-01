@@ -46,7 +46,9 @@ export default function GeolocationsPage() {
     const pincode = form.pincode.trim();
     const deliveryCharge = Number(form.deliveryCharge);
     if (!locationName) return setError("Location name is required.");
-    if (!pincode) return setError("Pincode is required.");
+    if (!/^\d{6}$/.test(pincode)) return setError("Pincode must be exactly 6 numeric digits.");
+    const duplicate = locations.some(location => location.id !== editing && location.pincode?.trim() === pincode);
+    if (duplicate) return setError(`Pincode ${pincode} already exists.`);
     if (!Number.isFinite(deliveryCharge) || deliveryCharge < 0) return setError("Delivery charge must be 0 or more.");
     setSaving(true);
     try {
@@ -74,7 +76,7 @@ export default function GeolocationsPage() {
     {showForm && <div className="card border-success mb-3"><div className="card-header"><strong>{editing ? "Edit Pincode" : "Add Pincode"}</strong></div><form onSubmit={save}>
       <div className="card-body"><div className="row g-3">
         <div className="col-md-6"><label className="form-label">Location Name *</label><input className="form-control" value={form.locationName} onChange={e => setForm({ ...form, locationName: e.target.value })} placeholder="e.g. Baner" required /></div>
-        <div className="col-md-6"><label className="form-label">Pincode *</label><input className="form-control" value={form.pincode} onChange={e => setForm({ ...form, pincode: e.target.value })} placeholder="e.g. 411041" inputMode="numeric" required /></div>
+        <div className="col-md-6"><label className="form-label">Pincode *</label><input className="form-control" value={form.pincode} onChange={e => setForm({ ...form, pincode: e.target.value })} placeholder="e.g. 411041" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" required /></div>
         <div className="col-md-6"><label className="form-label">Delivery Charge</label><div className="input-group"><span className="input-group-text">₹</span><input className="form-control" type="number" min="0" step="0.01" value={form.deliveryCharge} onChange={e => setForm({ ...form, deliveryCharge: Number(e.target.value) })} /></div></div>
         <div className="col-12"><div className="form-check"><input className="form-check-input" type="checkbox" id="geolocation-active" checked={form.active} onChange={e => setForm({ ...form, active: e.target.checked })} /><label className="form-check-label" htmlFor="geolocation-active">Active</label></div></div>
       </div></div>
