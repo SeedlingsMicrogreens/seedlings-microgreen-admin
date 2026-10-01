@@ -100,3 +100,13 @@ body { margin: 0; }
 .seedlings-order-modal { z-index: 1060; pointer-events: auto; }
 .seedlings-order-modal .modal-dialog,
 .seedlings-order-modal .modal-content { pointer-events: auto; }
+
+/* Quantity offer editor: keep a subtle surface contrast without forcing a white background. */
+.seedlings-offer-section {
+  background: var(--bs-tertiary-bg);
+  border: 1px solid var(--bs-border-color);
+}
+.seedlings-offer-section .card-header,
+.seedlings-offer-section .card-body {
+  background: transparent;
+}

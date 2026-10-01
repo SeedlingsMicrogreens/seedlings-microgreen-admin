@@ -298,7 +298,7 @@ export default function OffersPage() {
 
                   {form.type === "quantity" && (
                     <div className="col-12">
-                      <div className="card bg-light border">
+                      <div className="card seedlings-offer-section">
                         <div className="card-header"><strong>Quantity Offer</strong><div className="small text-muted">Buy a Product with one packaging size and get another Product with one packaging size free.</div></div>
                         <div className="card-body">
                           <div className="row g-3">
