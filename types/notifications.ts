@@ -1,3 +1,5 @@
+export type AdminNotificationType = "one_time_order" | "subscription" | "other";
+
 export type NotificationRuleType =
   | "new_order"
   | "order_status"
@@ -14,13 +16,18 @@ export type NotificationRecord = {
   recipientEmail?: string;
   recipientPhone?: string;
   channel: NotificationChannel;
-  type: NotificationRuleType;
+  type: NotificationRuleType | AdminNotificationType;
   title: string;
   message: string;
   status: "queued" | "sent" | "failed" | "read";
   relatedId?: string;
-  createdAt?: unknown;
+  campaignId?: string;
+  audienceType?: AdminNotificationType;
+  recipientCustomerId?: string;
+  recipientName?: string;
+  messageHtml?: string;
   sentAt?: unknown;
+  createdAt?: unknown;
 };
 
 export type NotificationPreferences = {
