@@ -3,6 +3,7 @@ import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { storage, auth } from "./firebase";
 import type { Customer } from "@/types/customer";
 import type { SalesProduct, SalesProductSellingOption } from "@/types/salesProduct";
+import { sendTransactionNotification } from "./notificationService";
 
 export async function uploadOrderPaymentReceipt(orderId: string, file: File, transactionKey?: string) {
   if (!file) return null;
@@ -137,6 +138,12 @@ export async function createAdminOrder(args: {
       paymentReceiptPath: receipt.path,
       paymentTransactions: [tx],
     });
+  }
+
+  try {
+    await sendTransactionNotification({ event: "order_placed", orderId: ref.id });
+  } catch (error) {
+    console.error("Customer order-placed notification failed", error);
   }
 
   return ref;

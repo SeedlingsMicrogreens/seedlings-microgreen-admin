@@ -8,6 +8,7 @@ import type { GrowingBatch } from "@/types/growingBatch";
 import type { Subscription } from "@/types/subscription";
 import type { Fulfilment, FulfilmentPackLine, FulfilmentAllocation, PackingItem } from "@/types/fulfilment";
 import type { SubscriptionDelivery } from "@/types/subscriptionDelivery";
+import { sendTransactionNotification } from "./notificationService";
 
 function numberValue(value: unknown) {
   const n = Number(value ?? 0);
@@ -406,6 +407,13 @@ export async function packOrderFulfilment(
   });
 
   await auditEvent("pack", "fulfilments", createdFulfilmentId, `${packedCompletely ? "Packed" : "Partially packed"} order ${orderId}${subscriptionDeliveryId ? ` / subscription delivery ${subscriptionDeliveryId}` : ""}`);
+  if (packedCompletely) {
+    try {
+      await sendTransactionNotification({ event: "order_packed", orderId });
+    } catch (error) {
+      console.error("Customer packed notification failed", error);
+    }
+  }
   return { fulfilmentId: createdFulfilmentId, packedCompletely, subscriptionDeliveryId };
 }
 

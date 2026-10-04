@@ -9,6 +9,7 @@ import type { Order, OrderStatus, PaymentTransaction } from "@/types/order";
 import { auditEvent } from "./firestore";
 import { canTransitionOrderStatus } from "@/types/order";
 import { uploadOrderPaymentReceipt } from "./orderCreationService";
+import { sendTransactionNotification } from "./notificationService";
 
 export async function updateOrderStatus(
   order: Order,
@@ -45,6 +46,23 @@ export async function updateOrderStatus(
     });
   });
   await auditEvent("update", "orders", order.id, `Order status changed to ${nextStatus}`);
+
+  const notificationEvent = nextStatus === "packed"
+    ? "order_packed"
+    : nextStatus === "out_for_delivery"
+      ? "out_for_delivery"
+      : nextStatus === "delivered"
+        ? "order_delivered"
+        : nextStatus === "cancelled"
+          ? "order_cancelled"
+          : null;
+  if (notificationEvent) {
+    try {
+      await sendTransactionNotification({ event: notificationEvent, orderId: order.id });
+    } catch (error) {
+      console.error("Customer transaction notification failed", error);
+    }
+  }
 }
 
 export async function addOrderPayment(

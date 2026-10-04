@@ -3,6 +3,7 @@ export type CustomerStatus = "active" | "blocked";
 export type Customer = {
   id: string;
   authUid?: string;
+  authUids?: string[];
   mobileNumber?: string;
   phone?: string;
   name?: string;

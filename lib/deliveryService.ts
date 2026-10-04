@@ -5,6 +5,7 @@ import { createSubscriptionDeliveryAtHandoverInTransaction, updateSubscriptionDe
 import type { DeliveryUser, DeliveryAssignment } from "@/types/delivery";
 import type { Order, OrderStatus } from "@/types/order";
 import { recordBatchHandoverSalesInTransaction } from "./growingBatchService";
+import { sendTransactionNotification } from "./notificationService";
 
 export async function assignOrderToDelivery(
   order: Order,
@@ -90,6 +91,11 @@ export async function assignOrderToDelivery(
   });
 
   await auditEvent("create", "deliveryAssignments", assignmentRef.id, `Assigned ${order.orderNumber || order.id} to ${deliveryUser.name}`);
+  try {
+    await sendTransactionNotification({ event: "out_for_delivery", orderId: order.id });
+  } catch (error) {
+    console.error("Customer out-for-delivery notification failed", error);
+  }
 }
 
 export async function updateDeliveryAssignmentStatus(
@@ -186,4 +192,17 @@ export async function updateDeliveryAssignmentStatus(
 
   });
   await auditEvent("update", "deliveryAssignments", assignmentId, `Delivery assignment status changed to ${status}`);
+  if (status === "delivered") {
+    try {
+      await sendTransactionNotification({ event: "order_delivered", orderId: assignmentData.orderId });
+    } catch (error) {
+      console.error("Customer delivered notification failed", error);
+    }
+  } else if (status === "cancelled") {
+    try {
+      await sendTransactionNotification({ event: "order_cancelled", orderId: assignmentData.orderId });
+    } catch (error) {
+      console.error("Customer cancellation notification failed", error);
+    }
+  }
 }

@@ -57,7 +57,61 @@ service cloud.firestore {
     match /cmsNavigation/{id} { allow read, write: if admin(); }
     match /cmsSiteSettings/{id} { allow read, write: if admin(); }
 
-    match /notifications/{id} { allow read, write: if admin(); }
+    match /notifications/{id} {
+      allow read, write: if admin();
+      allow read: if signedIn() && (
+        resource.data.recipientUid == request.auth.uid
+        || (
+          resource.data.recipientCustomerId is string
+          && exists(/databases/$(database)/documents/customers/$(resource.data.recipientCustomerId))
+          && (
+            get(/databases/$(database)/documents/customers/$(resource.data.recipientCustomerId)).data.authUid == request.auth.uid
+            || (
+              get(/databases/$(database)/documents/customers/$(resource.data.recipientCustomerId)).data.authUids is list
+              && get(/databases/$(database)/documents/customers/$(resource.data.recipientCustomerId)).data.authUids.hasAny([request.auth.uid])
+            )
+          )
+        )
+      );
+      allow update: if signedIn()
+        && (
+          resource.data.recipientUid == request.auth.uid
+          || (
+            resource.data.recipientCustomerId is string
+            && exists(/databases/$(database)/documents/customers/$(resource.data.recipientCustomerId))
+            && (
+              get(/databases/$(database)/documents/customers/$(resource.data.recipientCustomerId)).data.authUid == request.auth.uid
+              || (
+                get(/databases/$(database)/documents/customers/$(resource.data.recipientCustomerId)).data.authUids is list
+                && get(/databases/$(database)/documents/customers/$(resource.data.recipientCustomerId)).data.authUids.hasAny([request.auth.uid])
+              )
+            )
+          )
+        )
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt']);
+    }
+
+    match /customerPushSubscriptions/{id} {
+      allow read, write: if admin();
+      allow read: if signedIn() && resource.data.authUid == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.authUid == request.auth.uid
+        && request.resource.data.customerId is string
+        && exists(/databases/$(database)/documents/customers/$(request.resource.data.customerId))
+        && (
+          get(/databases/$(database)/documents/customers/$(request.resource.data.customerId)).data.authUid == request.auth.uid
+          || (
+            get(/databases/$(database)/documents/customers/$(request.resource.data.customerId)).data.authUids is list
+            && get(/databases/$(database)/documents/customers/$(request.resource.data.customerId)).data.authUids.hasAny([request.auth.uid])
+          )
+        );
+      allow update: if signedIn()
+        && resource.data.authUid == request.auth.uid
+        && request.resource.data.authUid == resource.data.authUid
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.token == resource.data.token;
+      allow delete: if signedIn() && resource.data.authUid == request.auth.uid;
+    }
     match /auditEvents/{id} { allow read, write: if admin(); }
 
     match /websiteTrustPoints/{id} { allow read, write: if admin(); }
