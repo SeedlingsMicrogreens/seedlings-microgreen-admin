@@ -4,6 +4,9 @@ import { storage, auth } from "./firebase";
 import type { Customer } from "@/types/customer";
 import type { SalesProduct, SalesProductSellingOption } from "@/types/salesProduct";
 import { sendTransactionNotification } from "./notificationService";
+import { normalizeOrderItemWeightGrams } from "./packingMath";
+
+export { normalizeOrderItemWeightGrams } from "./packingMath";
 
 export async function uploadOrderPaymentReceipt(orderId: string, file: File, transactionKey?: string) {
   if (!file) return null;
@@ -51,7 +54,7 @@ export async function createAdminOrder(args: {
     sellingOptionLabel: x.sellingOption.weightGrams >= 1000 && x.sellingOption.weightGrams % 1000 === 0
       ? `${x.sellingOption.weightGrams / 1000}kg box`
       : `${x.sellingOption.weightGrams}g box`,
-    weightGrams: Number(x.sellingOption.weightGrams),
+    weightGrams: normalizeOrderItemWeightGrams(x.quantity, x.sellingOption.weightGrams),
     quantity: x.quantity,
     unitPrice: Number(x.sellingOption.price),
     lineTotal: Number(x.sellingOption.price) * x.quantity,

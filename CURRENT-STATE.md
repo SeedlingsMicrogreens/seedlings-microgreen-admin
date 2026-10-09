@@ -92,11 +92,43 @@ Current business/admin collections include:
 - `auditEvents`
 - Website CMS collections such as `cmsPages`, `cmsFaq`, `cmsTestimonials`, `cmsBlogs`, `cmsBanners`, `cmsNavigation`, `cmsSiteSettings`, `websiteTrustPoints`
 
-### Order-line packing weight rule
+### Canonical combo component contract
 
-For customer orders, `OrderItem.weightGrams` is the **total grams for the line** (packaging size × quantity). Fulfilment must use this value directly and must not multiply it by `OrderItem.quantity` again.
+Combo salable products are built from production Microgreen components using `percentage` shares of the package. `quantityGrams` is not the canonical source of truth for combo packs; it is only meaningful for single-product or legacy records.
 
-Example: 100g packaging × 2 boxes → `weightGrams = 200`; Fulfilment requirement = 200g.
+For a 100g combo with a 60/40 split:
+- Broccoli = 60g
+- Radish = 40g
+
+For 10 such combo packs:
+- Broccoli = 600g
+- Radish = 400g
+- Total pack weight = 1000g
+
+### Order-line weight and per-package weight rule
+
+The canonical contract is:
+- `sellingOption.weightGrams` / package size = grams per package
+- `OrderItem.quantity` = number of packages ordered
+- `OrderItem.weightGrams` = total line weight = package size × quantity
+
+Fulfiment and stock deduction must operate on the total line requirement. They must not multiply the same quantity twice.
+
+Example: 100g packaging × 10 boxes → `weightGrams = 1000`; component demand is 600g broccoli + 400g radish.
+
+### Demand and packing rules
+
+- Forecasting must compute combo component demand from the component percentage and the actual package size/quantity.
+- Packing UI and service calculations must use the same component percentages and same remaining-order grammar.
+- Stock deduction and batch allocation occur only for the packed grams for that request.
+- Partial fulfilment retains the remaining quantity; a fully packed order moves to the handover lifecycle.
+
+### Packing idempotency and reversal rules
+
+- A repeated logical packing request must be treated as the same operation, not an additional stock deduction.
+- The duplicate check, stock deduction, order update, and fulfilment creation must be atomic within the transaction.
+- A packing operation can only be cancelled or reversed before handover has occurred.
+- Once a fulfilment has been handed over, its stock deduction is not reversible unless an explicit, safe reversal flow is defined and validated by authoritative handover state.
 
 ## 5. Inventory and fulfilment
 

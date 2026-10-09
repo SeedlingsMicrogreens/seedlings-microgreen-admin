@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { listCollection } from "@/lib/firestore";
-import { listManualFulfilments, packOrderFulfilment } from "@/lib/fulfilmentService";
+import { cancelFulfilmentPacking, listManualFulfilments, packOrderFulfilment } from "@/lib/fulfilmentService";
 import { addNextSubscriptionDeliveryForFulfilment } from "@/lib/subscriptionDeliveryService";
 import { packagingDisplay } from "@/types/packaging";
 import type { Packaging } from "@/types/packaging";
@@ -246,6 +246,22 @@ export default function FulfilmentPage() {
     }
   }
 
+  async function deleteFulfilment(record: Fulfilment) {
+    if (!user) return;
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      await cancelFulfilmentPacking(record.id, user.uid, user.email ?? undefined);
+      setMessage(`Packing for ${record.orderNumber || record.orderId} has been cancelled before handover.`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to cancel the packing record.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   return (
     <AdminPage>
       <div className="container-fluid py-3">
@@ -372,7 +388,11 @@ export default function FulfilmentPage() {
                   <td>{record.subscriptionDeliveryId || "—"}</td>
                   <td>{numberValue(record.totalGramsConsumed).toLocaleString()} gms</td>
                   <td><div className="small">{(record.allocations ?? []).map((a, i) => <div key={`${a.growingBatchId}-${a.productId}-${i}`}>{a.growingBatchNumber}: {a.productName} {numberValue(a.quantityGrams).toLocaleString()}g</div>)}</div></td>
-                  <td><span className={`badge text-bg-${record.status === "packed" ? "success" : "warning"}`}>{record.status}</span></td>
+                  <td>
+                    <span className={`badge text-bg-${record.status === "packed" ? "success" : "warning"}`}>{record.status}</span>
+                    {record.status !== "cancelled" && !["delivered", "out_for_delivery", "handed_to_delivery"].includes((orderById.get(record.orderId)?.status ?? "")) && !record.subscriptionDeliveryId && <button className="btn btn-link btn-sm p-0 ms-2 text-danger" onClick={() => void deleteFulfilment(record)}>Delete</button>}
+                    {record.status !== "cancelled" && record.subscriptionDeliveryId && !["delivered", "out_for_delivery", "handed_to_delivery"].includes((subscriptionDeliveryById.get(record.subscriptionDeliveryId)?.status ?? "")) && <button className="btn btn-link btn-sm p-0 ms-2 text-danger" onClick={() => void deleteFulfilment(record)}>Delete</button>}
+                  </td>
                 </tr>)}
                 {!activeHistory.length && <tr><td colSpan={7} className="text-center text-muted py-4">No active fulfilment history.</td></tr>}
               </tbody>

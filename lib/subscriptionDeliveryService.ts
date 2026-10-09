@@ -5,6 +5,9 @@ import { addWeeks } from "./subscriptionService";
 import type { Order } from "@/types/order";
 import type { Subscription } from "@/types/subscription";
 import type { SubscriptionDelivery, SubscriptionDeliveryStatus } from "@/types/subscriptionDelivery";
+import { normalizeSubscriptionLineWeightGrams } from "./packingMath";
+
+export { normalizeSubscriptionLineWeightGrams } from "./packingMath";
 
 function deliveryDocumentId(subscriptionId: string, orderId: string, deliveryNumber: number) {
   return deliveryNumber > 0 ? `${subscriptionId}_${deliveryNumber}` : `${subscriptionId}_${orderId}`;
@@ -70,16 +73,17 @@ export async function addNextSubscriptionDeliveryForFulfilment(
     const orderRef = doc(collection(db, "orders"));
     const orderNumber = `ORD-${orderRef.id.slice(0, 8).toUpperCase()}`;
     const lineTotal = Number(subscription.unitPrice || 0) * Math.max(1, Number(subscription.quantity || 1));
+    const quantity = Math.max(1, Math.round(Number(subscription.quantity || 1)));
     const item = {
       salableProductId: subscription.productId,
       productId: subscription.productId,
       productName: subscription.productName,
-      quantity: Math.max(1, Math.round(Number(subscription.quantity || 1))),
+      quantity,
       unitPrice: Number(subscription.unitPrice || 0),
       lineTotal,
       sellingOptionId: subscription.sellingOptionId,
       sellingOptionLabel: subscription.sellingOptionLabel,
-      weightGrams: Number(subscription.weightGrams || 0),
+      weightGrams: normalizeSubscriptionLineWeightGrams(quantity, Number(subscription.weightGrams || 0)),
       packedGrams: 0,
       packedBoxes: 0,
     };

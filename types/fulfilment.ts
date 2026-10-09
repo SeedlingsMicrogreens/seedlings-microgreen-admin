@@ -1,5 +1,5 @@
 export type FulfilmentType = "ORDER" | "SUBSCRIPTION";
-export type FulfilmentStatus = "partially_packed" | "packed" | "out_for_delivery" | "delivered";
+export type FulfilmentStatus = "partially_packed" | "packed" | "out_for_delivery" | "delivered" | "cancelled";
 
 export type FulfilmentPackLine = {
   orderItemIndex: number;
@@ -49,11 +49,16 @@ export type Fulfilment = {
   allocations: FulfilmentAllocation[];
   totalGramsConsumed: number;
   status: FulfilmentStatus;
+  idempotencyKey?: string;
   packedAt?: unknown;
   packedByUid?: string;
   packedByEmail?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
+  cancelledAt?: unknown;
+  cancelledByUid?: string;
+  cancelledByEmail?: string;
+  reversalReason?: string;
   deliveryUserId?: string;
   deliveryUserName?: string;
   soldQuantityRecordedAt?: unknown;

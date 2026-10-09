@@ -1,4 +1,4 @@
-import { collection, doc, getDocs, orderBy, query, runTransaction, serverTimestamp, where, arrayUnion, type Transaction } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, orderBy, query, runTransaction, serverTimestamp, where, arrayUnion, type Transaction } from "firebase/firestore";
 import { db } from "./firebase";
 import { auditEvent } from "./firestore";
 import type { Product } from "@/types/catalog";
@@ -9,50 +9,14 @@ import type { Subscription } from "@/types/subscription";
 import type { Fulfilment, FulfilmentPackLine, FulfilmentAllocation, PackingItem } from "@/types/fulfilment";
 import type { SubscriptionDelivery } from "@/types/subscriptionDelivery";
 import { sendTransactionNotification } from "./notificationService";
+import { buildPackingIdempotencyKey, componentGramsPerBox, requiredItemGrams, samePackingSnapshot } from "./packingMath";
 
 function numberValue(value: unknown) {
   const n = Number(value ?? 0);
   return Number.isFinite(n) ? n : 0;
 }
 
-function requiredItemGrams(item: OrderItem) {
-  // Order `weightGrams` is already the total weight for the order line
-  // (packaging size × quantity). Do not multiply by quantity again.
-  return Math.max(0, Math.round(numberValue(item.weightGrams)));
-}
-
-function componentGramsPerBox(salable: SalesProduct, boxGrams: number) {
-  const components = salable.components ?? [];
-  if (!components.length) throw new Error(`${salable.name} has no Microgreen components.`);
-
-  if (salable.type === "single") {
-    return components.map(component => ({
-      productId: component.productId,
-      productName: component.productName,
-      quantityGrams: boxGrams,
-    }));
-  }
-
-  const percentages = components.map(component => {
-    const percentage = numberValue(component.percentage);
-    if (percentage > 0) return percentage;
-    const legacyTotal = components.reduce((sum, c) => sum + Math.max(0, numberValue(c.quantityGrams)), 0);
-    return legacyTotal > 0 ? (numberValue(component.quantityGrams) / legacyTotal) * 100 : 0;
-  });
-  const totalPercentage = percentages.reduce((sum, value) => sum + value, 0);
-  if (!Number.isFinite(totalPercentage) || totalPercentage <= 0) {
-    throw new Error(`${salable.name} has invalid Microgreen percentages.`);
-  }
-
-  const result = components.map((component, index) => ({
-    productId: component.productId,
-    productName: component.productName,
-    quantityGrams: Math.round(boxGrams * percentages[index] / totalPercentage),
-  }));
-  const difference = boxGrams - result.reduce((sum, item) => sum + item.quantityGrams, 0);
-  if (result.length) result[result.length - 1].quantityGrams += difference;
-  return result;
-}
+export { buildPackingIdempotencyKey, componentGramsPerBox, requiredItemGrams, samePackingSnapshot } from "./packingMath";
 
 function orderStatusCanBePacked(status: OrderStatus) {
   return !["pending_payment", "cancelled", "delivered", "handed_to_delivery", "out_for_delivery"].includes(status);
@@ -138,6 +102,7 @@ export async function packOrderFulfilment(
 ) {
   if (!lines.length) throw new Error("Add at least one packing line.");
 
+  const idempotencyKey = buildPackingIdempotencyKey(orderId, lines);
   let createdFulfilmentId = "";
   let packedCompletely = false;
   let subscriptionDeliveryId: string | null = null;
@@ -150,6 +115,14 @@ export async function packOrderFulfilment(
     getDocs(query(collection(db, "packagingMaster"), where("active", "==", true))),
     getDocs(collection(db, "growingBatches")),
   ]);
+
+  const existingFulfilments = await getDocs(query(collection(db, "fulfilments"), where("orderId", "==", orderId)));
+  const existingDuplicate = existingFulfilments.docs
+    .map(docRef => ({ id: docRef.id, ...(docRef.data() as Omit<Fulfilment, "id">) } as Fulfilment))
+    .find(record => samePackingSnapshot(record, idempotencyKey));
+  if (existingDuplicate) {
+    throw new Error("This packing request has already been processed. Please refresh and continue with any remaining quantities.");
+  }
 
   await runTransaction(db, async transaction => {
     const orderRef = doc(db, "orders", orderId);
@@ -398,6 +371,7 @@ export async function packOrderFulfilment(
       allocations,
       totalGramsConsumed: allocations.reduce((sum, item) => sum + item.quantityGrams, 0),
       status: packedCompletely ? "packed" : "partially_packed",
+      idempotencyKey,
       packedAt: serverTimestamp(),
       packedByUid: uid,
       packedByEmail: email ?? "",
@@ -421,6 +395,109 @@ export async function packOrderFulfilment(
 export async function listManualFulfilments() {
   const snapshot = await getDocs(query(collection(db, "fulfilments"), orderBy("createdAt", "desc")));
   return snapshot.docs.map(item => ({ id: item.id, ...(item.data() as Omit<Fulfilment, "id">) })) as Fulfilment[];
+}
+
+export async function cancelFulfilmentPacking(
+  fulfilmentId: string,
+  uid: string,
+  email?: string,
+) {
+  const fulfilmentRef = doc(db, "fulfilments", fulfilmentId);
+  const fulfilmentSnap = await getDoc(fulfilmentRef);
+  if (!fulfilmentSnap.exists()) throw new Error("Packing record no longer exists.");
+
+  const current = { id: fulfilmentSnap.id, ...(fulfilmentSnap.data() as Omit<Fulfilment, "id">) } as Fulfilment;
+  if (current.status === "cancelled") throw new Error("This packing operation has already been cancelled.");
+
+  const orderRef = doc(db, "orders", current.orderId);
+  const orderSnap = await getDoc(orderRef);
+  if (!orderSnap.exists()) throw new Error("Order no longer exists.");
+
+  const order = { id: orderSnap.id, ...(orderSnap.data() as Omit<Order, "id">) } as Order;
+  const relatedDelivery = current.subscriptionDeliveryId ? doc(db, "subscriptionDeliveries", current.subscriptionDeliveryId) : null;
+  let delivered = false;
+
+  if (relatedDelivery) {
+    const deliverySnap = await getDoc(relatedDelivery);
+    delivered = deliverySnap.exists() && String(deliverySnap.data()?.status ?? "") === "delivered";
+  }
+  if (order.status === "out_for_delivery" || order.status === "delivered" || delivered) {
+    throw new Error("This packing operation cannot be deleted or cancelled because it has already been handed over.");
+  }
+
+  await runTransaction(db, async transaction => {
+    const freshFulfilment = await transaction.get(fulfilmentRef);
+    if (!freshFulfilment.exists()) throw new Error("Packing record no longer exists during reversal.");
+
+    const fresh = { id: freshFulfilment.id, ...(freshFulfilment.data() as Omit<Fulfilment, "id">) } as Fulfilment;
+    if (fresh.status === "cancelled") throw new Error("This packing operation has already been cancelled.");
+
+    const freshOrderSnap = await transaction.get(orderRef);
+    if (!freshOrderSnap.exists()) throw new Error("Order no longer exists during reversal.");
+    const freshOrder = { id: freshOrderSnap.id, ...(freshOrderSnap.data() as Omit<Order, "id">) } as Order;
+    if (freshOrder.status === "out_for_delivery" || freshOrder.status === "delivered") {
+      throw new Error("This packing operation cannot be deleted or cancelled because it has already been handed over.");
+    }
+
+    const itemTotals = new Map<string, number>();
+    for (const item of fresh.items ?? []) {
+      for (const component of item.components ?? []) {
+        itemTotals.set(component.productId, (itemTotals.get(component.productId) ?? 0) + component.totalGrams);
+      }
+    }
+
+    for (const [productId, quantity] of itemTotals) {
+      const productRef = doc(db, "products", productId);
+      const productSnap = await transaction.get(productRef);
+      if (!productSnap.exists()) continue;
+      const product = { id: productSnap.id, ...(productSnap.data() as Omit<Product, "id">) } as Product;
+      const previous = Math.max(0, numberValue(product.stockGrams ?? product.stock));
+      const restored = Math.max(0, previous + Math.max(0, quantity));
+      transaction.update(productRef, {
+        stockGrams: restored,
+        stock: restored,
+        updatedAt: serverTimestamp(),
+      });
+      const adjustmentRef = doc(collection(db, "inventoryAdjustments"));
+      transaction.set(adjustmentRef, {
+        productId,
+        productName: product.name,
+        type: "fulfilment_reversal",
+        quantity,
+        unit: "g",
+        previousStock: previous,
+        newStock: restored,
+        reason: `Packing reversal for ${fresh.orderNumber || fresh.orderId}`,
+        orderId: fresh.orderId,
+        createdByUid: uid,
+        createdByEmail: email ?? "",
+        createdAt: serverTimestamp(),
+      });
+    }
+
+    const rebuiltItems = (freshOrder.items ?? []).map(item => ({
+      ...item,
+      packedGrams: 0,
+      packedBoxes: 0,
+    }));
+
+    transaction.update(orderRef, {
+      items: rebuiltItems,
+      packingStatus: "pending",
+      updatedAt: serverTimestamp(),
+    });
+
+    transaction.update(fulfilmentRef, {
+      status: "cancelled",
+      cancelledAt: serverTimestamp(),
+      cancelledByUid: uid,
+      cancelledByEmail: email ?? "",
+      reversalReason: "Packing cancelled before handover.",
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  return { cancelled: true };
 }
 
 export async function packSalableProducts() {

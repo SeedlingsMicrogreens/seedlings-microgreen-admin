@@ -15,6 +15,17 @@
 - Added a Waste (gms) column showing the cumulative `batchWasteGrams` across all microgreens in each closed batch.
 - Active Batches continue to show their existing Status column.
 
+## Combo demand, packing, stock, idempotency and delete-before-handover — current fix baseline
+
+- Combo Product components are defined by `percentage` of the total package weight. Multi-component combo products may store `quantityGrams: 0`; percentage is the canonical contract for demand and packing math.
+- For a 100g combo with 60% broccoli and 40% radish, one unit requires 60g broccoli and 40g radish. Ten units require 600g and 400g respectively.
+- Order line `weightGrams` is the total line weight for the order item, not a per-box value multiplied again by quantity. A 100g box with quantity 10 should yield `weightGrams = 1000` at the order-line level.
+- Forecasting, fulfillment, and stock deduction all use the same percentage-based conversion to derive component grams from the selected package size and quantity.
+- Packing operations are idempotent at the logical-request level. A retry of the same logical request must not create a duplicate fulfilment row or a second inventory deduction.
+- A packing operation may be reversed or cancelled only when the packed goods have not been handed over. Once handover occurs, the system must reject deletion and leave stock records unchanged.
+- Deletion/cancellation must reverse the exact component deductions, inventory adjustments, and order-packing state for the selected packing operation without touching unrelated packing records.
+- Regression tests now cover combo percentages, package weight consistency, partial/full packing, duplicate requests, and delete-before-handover reversal.
+
 ## Fulfilment packing weight fix — Phase 47 baseline
 
 - Fixed pending packing requirements to treat an order item's `weightGrams` as the **total line weight** already calculated from packaging size × box quantity.

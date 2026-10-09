@@ -77,6 +77,32 @@ Major current areas:
 - Audit events are retained.
 - No separate background scheduling platform is introduced by the current architecture.
 
+## Active operational rules
+
+### Combo demand and packaging contract
+- Combo salable Products use component `percentage` for the share of the total package weight.
+- `quantityGrams` is not used as the canonical parser for percentage-based combos.
+- Component demand is derived as: package weight × component percentage ÷ total percentage × quantity.
+- Example: 100g × 10 boxes with 60/40 split → 600g broccoli + 400g radish.
+
+### Order-line weight and fulfilment requirement contract
+- `sellingOption.weightGrams` is the per-package weight.
+- `OrderItem.quantity` is the number of packages ordered.
+- `OrderItem.weightGrams` is the total line weight and must be used directly in fulfilment calculations.
+- Fulfilment must not multiply the line weight by `quantity` again.
+
+### Demand lifecycle and packing rules
+- Forecast includes both open orders and active subscription delivery requirements while those requirements remain unfulfilled.
+- Subscription delivery order generation does not create a second requirement beyond the original active subscription; demand remains tracked correctly until the order is fulfilled or closed.
+- Partial packing preserves the remaining quantity until the full required grams are packed.
+- Delivered and cancelled orders remain excluded from open demand according to current status rules.
+
+### Idempotent packing and safe reversal rules
+- The packing transaction must prevent the same logical packing request from being applied more than once.
+- The system must guard against duplicate fulfilment records, duplicate inventory adjustments, and duplicate stock deduction.
+- A packing operation may be deleted or cancelled only before handover; once a handover has occurred, the stock deduction is protected from unsafe reversal.
+- Reversal must restore exact component stock and inventory-adjustment history for the selected packing record without altering unrelated fulfilment records.
+
 ## Future work rules
 
 When adding a new requirement, record it here only after the requirement is agreed. Include:
