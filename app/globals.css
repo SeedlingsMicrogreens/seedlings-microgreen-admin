@@ -25,6 +25,17 @@ body { margin: 0; }
   --seedlings-green: #2f6b2f;
   --seedlings-green-dark: #245525;
   --seedlings-surface: #ffffff;
+  --seedlings-sidebar-submenu-bg: rgba(255, 255, 255, 0.06);
+  --seedlings-sidebar-submenu-hover-bg: rgba(255, 255, 255, 0.12);
+  --seedlings-sidebar-submenu-active-bg: rgba(47, 107, 47, 0.28);
+}
+
+.app-sidebar,
+.sidebar-wrapper,
+.sidebar-menu {
+  --lte-sidebar-submenu-bg: var(--seedlings-sidebar-submenu-bg);
+  --lte-sidebar-submenu-hover-bg: var(--seedlings-sidebar-submenu-hover-bg);
+  --lte-sidebar-submenu-active-bg: var(--seedlings-sidebar-submenu-active-bg);
 }
 
 .app-sidebar .sidebar-brand .brand-text,
