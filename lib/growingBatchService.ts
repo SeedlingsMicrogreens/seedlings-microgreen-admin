@@ -1,7 +1,10 @@
-import { collection, doc, getDocs, query, where, runTransaction, serverTimestamp, type Transaction, type DocumentReference, type DocumentSnapshot } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, where, runTransaction, serverTimestamp, type Transaction, type DocumentReference, type DocumentSnapshot } from "firebase/firestore";
 import { db } from "./firebase";
 import { auditEvent } from "./firestore";
+import { canAutoCloseBatch, isBatchClosed, itemRemainingStockGrams, planBatchClosure } from "./batchAccounting";
+import { validateGrowingBatchCanBeDeleted, type GrowingBatchDeletionDependencies } from "./growingBatchDeletion";
 import type { Product } from "@/types/catalog";
+import type { Fulfilment } from "@/types/fulfilment";
 import type {
   GrowingBatch,
   GrowingBatchItem,
@@ -176,6 +179,46 @@ export async function createGrowingBatch(data: {
 
   await auditEvent("create", "growingBatches", ref.id, `Created growing batch ${data.batchNumber.trim()}`);
   return ref.id;
+}
+
+async function readGrowingBatchDeleteDependencies(batchId: string): Promise<GrowingBatchDeletionDependencies> {
+  const adjustmentsSnapshot = await getDocs(query(collection(db, "inventoryAdjustments"), where("growingBatchId", "==", batchId)));
+  const fulfilmentsSnapshot = await getDocs(collection(db, "fulfilments"));
+  let fulfilmentAllocationCount = 0;
+  fulfilmentsSnapshot.forEach(snapshot => {
+    const fulfilment = snapshot.data() as Partial<Fulfilment>;
+    if ((fulfilment.allocations ?? []).some(allocation => allocation.growingBatchId === batchId)) {
+      fulfilmentAllocationCount += 1;
+    }
+  });
+  return {
+    inventoryAdjustmentCount: adjustmentsSnapshot.size,
+    fulfilmentAllocationCount,
+  };
+}
+
+export async function deleteNotStartedGrowingBatch(batchId: string, uid: string, email?: string) {
+  if (!batchId) throw new Error("Growing batch ID is missing. Refresh and try again.");
+  const batchRef = doc(db, "growingBatches", batchId);
+  const currentSnapshot = await getDoc(batchRef);
+  if (!currentSnapshot.exists()) throw new Error("Growing batch no longer exists.");
+  validateGrowingBatchCanBeDeleted(
+    { id: currentSnapshot.id, ...(currentSnapshot.data() as Omit<GrowingBatch, "id">) } as GrowingBatch,
+  );
+
+  const dependencies = await readGrowingBatchDeleteDependencies(batchId);
+  let batchNumber = batchId;
+
+  await runTransaction(db, async transaction => {
+    const snapshot = await transaction.get(batchRef);
+    if (!snapshot.exists()) throw new Error("Growing batch no longer exists.");
+    const latest = { id: snapshot.id, ...(snapshot.data() as Omit<GrowingBatch, "id">) } as GrowingBatch;
+    batchNumber = latest.batchNumber || latest.id;
+    validateGrowingBatchCanBeDeleted(latest, dependencies);
+    transaction.delete(batchRef);
+  });
+
+  await auditEvent("delete", "growingBatches", batchId, `Deleted Not Started growing batch ${batchNumber} by ${email || uid}`);
 }
 
 const phaseKeys = ["soaking", "darkPeriod", "lightPeriod"] as const;
@@ -480,7 +523,7 @@ export async function updateGrowingBatchSoldQuantity(
     console.error("[WASTE-DEBUG]", step, { batchId: batch?.id, batchNumber: batch?.batchNumber, ...details });
   };
   debug("START", { uid, wasteQuantities });
-  if (batch.delivered || batch.status === "closed") {
+  if (isBatchClosed(batch)) {
     throw new Error("This batch is already closed.");
   }
 
@@ -518,7 +561,7 @@ export async function updateGrowingBatchSoldQuantity(
     const snapshot = await transaction.get(batchRef);
     if (!snapshot.exists()) throw new Error("Growing batch no longer exists.");
     const latest = snapshot.data() as GrowingBatch;
-    if (latest.delivered || latest.status === "closed") {
+    if (isBatchClosed(latest)) {
       throw new Error("This batch was already closed. Refresh and try again.");
     }
 
@@ -558,9 +601,8 @@ export async function updateGrowingBatchSoldQuantity(
     const updatedItems = (latest.items ?? []).map(item => {
       if (!harvestedItems.some(selected => selected.id === item.id)) return item;
 
-      const harvested = Math.max(0, Math.round(Number(item.actualYieldGrams ?? 0)));
       const sold = Math.max(0, Math.round(Number(item.soldQuantityGrams ?? 0)));
-      const currentStock = Math.max(0, Math.round(Number(item.batchStockGrams ?? Math.max(0, harvested - sold))));
+      const currentStock = itemRemainingStockGrams(item);
       const enteredWaste = Number(wasteQuantities[item.id] ?? 0);
 
       if (!Number.isInteger(enteredWaste) || enteredWaste < 0) {
@@ -655,7 +697,7 @@ export async function closeGrowingBatchFromInventory(
   email?: string,
   _wasteQuantities: Record<string, number> = {},
 ) {
-  if (batch.delivered || batch.status === "closed") {
+  if (isBatchClosed(batch)) {
     throw new Error("This batch is already closed.");
   }
   if (!batch.id) throw new Error("Growing batch ID is missing. Refresh and select the batch again.");
@@ -688,7 +730,7 @@ export async function closeGrowingBatchFromInventory(
     const snapshot = await transaction.get(batchRef);
     if (!snapshot.exists()) throw new Error("Growing batch no longer exists.");
     const latest = snapshot.data() as GrowingBatch;
-    if (latest.delivered || latest.status === "closed") {
+    if (isBatchClosed(latest)) {
       throw new Error("This batch was already closed. Refresh and retry.");
     }
 
@@ -699,27 +741,7 @@ export async function closeGrowingBatchFromInventory(
 
     // Close Batch is the final reconciliation action: whatever Stock remains
     // for every harvested microgreen is automatically treated as Waste.
-    const wasteByProductId = new Map<string, number>();
-    const updatedItems = (latest.items ?? []).map(item => {
-      if (!harvestedItems.some(selected => selected.id === item.id)) return item;
-
-      const currentStock = Math.max(0, Math.round(Number(item.batchStockGrams ?? 0)));
-      const previousWaste = cumulativeWasteByProductId.get(item.productId) ?? 0;
-      const finalWaste = previousWaste + currentStock;
-
-      if (currentStock > 0) {
-        wasteByProductId.set(
-          item.productId,
-          (wasteByProductId.get(item.productId) ?? 0) + currentStock,
-        );
-      }
-
-      return {
-        ...item,
-        batchStockGrams: 0,
-        batchWasteGrams: finalWaste,
-      };
-    });
+    const { updatedItems, wasteByProductId } = planBatchClosure(latest.items ?? [], cumulativeWasteByProductId);
 
     const productIds = [...wasteByProductId.keys()];
     const productRefs = productIds.map(productId => doc(db, "products", productId));
@@ -778,10 +800,9 @@ export async function closeGrowingBatchFromInventory(
       stockAdjustedAt: serverTimestamp(),
       stockAdjustedByUid: uid,
       stockAdjustedByEmail: email ?? "",
-      delivered: true,
-      deliveredAt: serverTimestamp(),
-      deliveredByUid: uid,
-      deliveredByEmail: email ?? "",
+      closedAt: serverTimestamp(),
+      closedByUid: uid,
+      closedByEmail: email ?? "",
       status: "closed" as GrowingBatchStatus,
       updatedAt: serverTimestamp(),
     });
@@ -838,40 +859,35 @@ export async function recordBatchHandoverSalesInTransaction(
     if (snapshot.exists()) latestBatches.set(snapshot.id, { id: snapshot.id, ...(snapshot.data() as Omit<GrowingBatch, "id">) });
   });
 
-  const updatedBatchStates = new Map<string, GrowingBatch>();
   const updatedBatchIds: string[] = [];
   const closedBatchIds: string[] = [];
 
   for (const [batchId, itemMap] of allocationsByBatch) {
     const batch = latestBatches.get(batchId);
-    if (!batch || batch.delivered || batch.status === "closed") continue;
+    if (!batch || isBatchClosed(batch)) continue;
     const updatedItems = (batch.items ?? []).map(item => {
       const sold = Math.max(0, Math.round(Number(item.soldQuantityGrams ?? 0)));
       const add = itemMap.get(item.id) ?? 0;
       return add > 0 ? { ...item, soldQuantityGrams: sold + add } : item;
     });
-    const updatedBatch = { ...batch, items: updatedItems };
-    updatedBatchStates.set(batchId, updatedBatch);
     updatedBatchIds.push(batchId);
-    transaction.update(doc(db, "growingBatches", batchId), { items: updatedItems, updatedAt: serverTimestamp() });
-  }
-
-  for (const [batchId, batch] of updatedBatchStates) {
-    const canAutoClose = batch.items.length > 0 && batch.items.every(item => {
-      const planned = Number(item.expectedYieldGrams ?? 0);
-      const sold = Number(item.soldQuantityGrams ?? 0);
-      return Number.isFinite(planned) && planned > 0 && sold >= planned;
-    });
-    if (canAutoClose) {
+    // Closure is decided only after the sold quantities above are applied, against harvested quantity.
+    if (canAutoCloseBatch(updatedItems)) {
       transaction.update(doc(db, "growingBatches", batchId), {
+        items: updatedItems.map(item => item.status === "completed_harvested" ? { ...item, batchStockGrams: 0 } : item),
         status: "closed" as GrowingBatchStatus,
-        delivered: true,
-        deliveredAt: serverTimestamp(),
-        deliveredByUid: uid,
-        deliveredByEmail: email ?? "",
+        stockAdjusted: true,
+        stockAdjustedAt: serverTimestamp(),
+        stockAdjustedByUid: uid,
+        stockAdjustedByEmail: email ?? "",
+        closedAt: serverTimestamp(),
+        closedByUid: uid,
+        closedByEmail: email ?? "",
         updatedAt: serverTimestamp(),
       });
       closedBatchIds.push(batchId);
+    } else {
+      transaction.update(doc(db, "growingBatches", batchId), { items: updatedItems, updatedAt: serverTimestamp() });
     }
   }
 
@@ -901,7 +917,7 @@ export async function recordBatchHandoverSales(
     result.closedBatchIds.push(...updated.closedBatchIds);
   });
   for (const batchId of result.updatedBatchIds) await auditEvent("batch_handover_sales", "growingBatches", batchId, `Updated sold quantity from handover for batch ${batchId}`);
-  for (const batchId of result.closedBatchIds) await auditEvent("batch_auto_close", "growingBatches", batchId, `Automatically closed batch ${batchId} after sold quantity reached planned quantity`);
+  for (const batchId of result.closedBatchIds) await auditEvent("batch_auto_close", "growingBatches", batchId, `Automatically closed batch ${batchId} after sold quantity reached harvested quantity`);
   return result;
 }
 
@@ -910,19 +926,18 @@ export async function markGrowingBatchDelivered(
   uid: string,
   email?: string,
 ) {
-  if (batch.delivered) throw new Error("This batch is already marked as delivered.");
+  if (isBatchClosed(batch)) throw new Error("This batch is already closed.");
   const batchRef = doc(db, "growingBatches", batch.id);
   await runTransaction(db, async transaction => {
     const snapshot = await transaction.get(batchRef);
     if (!snapshot.exists()) throw new Error("Growing batch no longer exists.");
     const latest = snapshot.data() as GrowingBatch;
-    if (latest.delivered) throw new Error("This batch is already marked as delivered.");
+    if (isBatchClosed(latest)) throw new Error("This batch is already closed.");
     transaction.update(batchRef, {
-      delivered: true,
       status: "closed" as GrowingBatchStatus,
-      deliveredAt: serverTimestamp(),
-      deliveredByUid: uid,
-      deliveredByEmail: email ?? "",
+      closedAt: serverTimestamp(),
+      closedByUid: uid,
+      closedByEmail: email ?? "",
       updatedAt: serverTimestamp(),
     });
   });

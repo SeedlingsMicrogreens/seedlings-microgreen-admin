@@ -224,7 +224,7 @@ export default function DeliveryPage() {
                 <div className="text-end">
                   <div className="fw-semibold"><i className="bi bi-person me-1" />{a.deliveryUserName}</div>
                   <div className="small text-muted"><i className="bi bi-telephone me-1" />{a.deliveryUserMobile || users.find(u => u.id === a.deliveryUserId)?.mobileNumber || "—"}</div>
-                  <div className="mt-2 text-nowrap">{a.status === "out_for_delivery" && <button className="btn btn-sm btn-success" onClick={() => void updateAssignment(a, "delivered")}>Delivered</button>}</div>
+                  <div className="mt-2 text-nowrap">{a.status === "out_for_delivery" && <button className="btn btn-sm btn-success" onClick={() => void updateAssignment(a, "delivered")}>Mark as Delivered</button>}</div>
                 </div>
               </div>
             </div>;

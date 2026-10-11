@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { listCollection } from "@/lib/firestore";
+import { getOrderById, listActiveOrders, listDeliveredOrders } from "@/lib/orderListingService";
+import { defaultDeliveredDateRange, deliveredDateBounds, type DeliveredDateRange } from "@/lib/orderListing";
 import { createAdminOrder } from "@/lib/orderCreationService";
 import { updateOrderStatus, refundOrderPayment, addOrderPayment } from "@/lib/orderService";
 import type { Order, OrderStatus } from "@/types/order";
@@ -36,22 +38,26 @@ function customerLabel(c: Customer) { return c.name?.trim() || customerMobile(c)
 export default function OrdersPage() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
+  const [deliveredOrders, setDeliveredOrders] = useState<Awaited<ReturnType<typeof listDeliveredOrders>>>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [salableProducts, setSalableProducts] = useState<SalesProduct[]>([]);
   const [geolocations, setGeolocations] = useState<Geolocation[]>([]);
   const [offers, setOffers] = useState<Offer[]>([]);
-  const [tab, setTab] = useState<"list" | "create">("list");
+  const [tab, setTab] = useState<"active" | "delivered" | "create">("active");
   const [filter, setFilter] = useState<"all" | OrderStatus | "one_time" | "subscription">("all");
   const [search, setSearch] = useState("");
+  const [deliveredRange, setDeliveredRange] = useState<DeliveredDateRange>(() => defaultDeliveredDateRange());
+  const [appliedDeliveredRange, setAppliedDeliveredRange] = useState<DeliveredDateRange>(() => defaultDeliveredDateRange());
   const [selected, setSelected] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deliveredLoading, setDeliveredLoading] = useState(false);
   const [error, setError] = useState("");
 
   async function load() {
     setLoading(true);
     try {
       const [o, c, p, d, offerRows] = await Promise.all([
-        listCollection<Order>("orders", "createdAt"),
+        listActiveOrders(),
         listCollection<Customer>("customers", "updatedAt"),
         listCollection<SalesProduct>("salesProducts", "updatedAt"),
         listCollection<Geolocation>("geolocations", "updatedAt"),
@@ -64,9 +70,22 @@ export default function OrdersPage() {
     } finally { setLoading(false); }
   }
 
+  async function loadDelivered(startDate = appliedDeliveredRange.startDate, endDate = appliedDeliveredRange.endDate) {
+    setDeliveredLoading(true);
+    try {
+      const rows = await listDeliveredOrders(startDate, endDate);
+      setDeliveredOrders(rows);
+      setError("");
+    } catch (e) {
+      setError("Unable to load delivered orders.");
+      await showError(e, "Unable to load delivered orders.");
+    } finally { setDeliveredLoading(false); }
+  }
+
   useEffect(() => { void load(); }, []);
 
-  const filtered = useMemo(() => orders.filter(o => {
+  const viewOrders = tab === "delivered" ? deliveredOrders.map(row => row.order) : orders;
+  const filtered = useMemo(() => viewOrders.filter(o => {
     const term = search.toLowerCase();
     const source = filter === "one_time"
       ? (o.orderType ?? "one_time") === "one_time"
@@ -74,28 +93,64 @@ export default function OrdersPage() {
         ? o.orderType === "subscription"
         : filter === "all" || o.status === filter;
     return source && (!term || [o.orderNumber, o.id, o.customerName, o.customerMobile, o.subscriptionPlanName].filter(Boolean).join(" ").toLowerCase().includes(term));
-  }), [orders, filter, search]);
+  }), [viewOrders, filter, search]);
+  const deliveredAtByOrderId = useMemo(
+    () => new Map(deliveredOrders.map(row => [row.order.id, row.deliveredAt])),
+    [deliveredOrders],
+  );
+
+  async function applyDeliveredDateRange() {
+    try {
+      deliveredDateBounds(deliveredRange.startDate, deliveredRange.endDate);
+      setAppliedDeliveredRange(deliveredRange);
+      await loadDelivered(deliveredRange.startDate, deliveredRange.endDate);
+    } catch (e) {
+      await showError(e, "Enter a valid delivered-order date range.");
+    }
+  }
 
   return <AdminPage><div className="container-fluid py-3">
     <div className="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-3">
       <div><h1 className="h3 seedlings-brand mb-1">Orders</h1><p className="text-muted mb-0">Create and manage one-time orders from payment through delivery.</p></div>
-      <button className="btn btn-outline-secondary" onClick={() => void load()} title="Refresh orders"><i className="bi bi-arrow-clockwise" /></button>
+      <button className="btn btn-outline-secondary" onClick={() => void (tab === "delivered" ? loadDelivered() : load())} title="Refresh orders"><i className="bi bi-arrow-clockwise" /></button>
     </div>
     {error && <div className="alert alert-danger d-flex justify-content-between align-items-center"><span>{error}</span><button className="btn btn-sm btn-outline-danger" onClick={() => setError("")}>Dismiss</button></div>}
     <ul className="nav nav-tabs mb-3">
-      <li className="nav-item"><button className={`nav-link ${tab === "list" ? "active" : ""}`} onClick={() => setTab("list")}><i className="bi bi-list-ul me-1" />Order Master <span className="badge text-bg-secondary ms-1">{orders.length}</span></button></li>
+      <li className="nav-item"><button className={`nav-link ${tab === "active" ? "active" : ""}`} onClick={() => { setTab("active"); setFilter("all"); }}><i className="bi bi-list-ul me-1" />Active Orders <span className="badge text-bg-secondary ms-1">{orders.length}</span></button></li>
+      <li className="nav-item"><button className={`nav-link ${tab === "delivered" ? "active" : ""}`} onClick={() => { setTab("delivered"); setFilter("all"); void loadDelivered(); }}><i className="bi bi-check2-circle me-1" />Delivered</button></li>
       <li className="nav-item"><button className={`nav-link ${tab === "create" ? "active" : ""}`} onClick={() => setTab("create")}><i className="bi bi-plus-lg me-1" />Create One-time Order</button></li>
     </ul>
     {tab === "create"
-      ? <CreateOrder customers={customers} salableProducts={salableProducts} geolocations={geolocations} offers={offers} onCancel={() => setTab("list")} onSaved={async () => { await load(); setTab("list"); await showSuccess("One-time order created successfully."); }} />
-      : <ListOrders orders={filtered} loading={loading} search={search} setSearch={setSearch} filter={filter} setFilter={setFilter} selected={selected} setSelected={setSelected} user={user} onChanged={load} />}
+      ? <CreateOrder customers={customers} salableProducts={salableProducts} geolocations={geolocations} offers={offers} onCancel={() => setTab("active")} onSaved={async () => { await load(); setTab("active"); await showSuccess("One-time order created successfully."); }} />
+      : <>
+        {tab === "delivered" && <div className="card mb-3"><div className="card-body"><div className="row g-3 align-items-end">
+          <div className="col-md-4"><label className="form-label" htmlFor="delivered-start-date">Start Date</label><input id="delivered-start-date" className="form-control" type="date" value={deliveredRange.startDate} onChange={event => setDeliveredRange(range => ({ ...range, startDate: event.target.value }))} /></div>
+          <div className="col-md-4"><label className="form-label" htmlFor="delivered-end-date">End Date</label><input id="delivered-end-date" className="form-control" type="date" value={deliveredRange.endDate} onChange={event => setDeliveredRange(range => ({ ...range, endDate: event.target.value }))} /></div>
+          <div className="col-md-4"><button className="btn btn-primary" type="button" onClick={() => void applyDeliveredDateRange()} disabled={deliveredLoading}><i className="bi bi-search me-1" />{deliveredLoading ? "Searching..." : "Apply / Search"}</button></div>
+        </div><div className="form-text mt-2">Delivery completion dates, inclusive · local calendar dates</div></div></div>}
+        <ListOrders
+          orders={filtered}
+          loading={tab === "delivered" ? deliveredLoading : loading}
+          search={search}
+          setSearch={setSearch}
+          filter={filter}
+          setFilter={setFilter}
+          selected={selected}
+          setSelected={setSelected}
+          user={user}
+          onChanged={tab === "delivered" ? () => loadDelivered() : load}
+          deliveredAtByOrderId={tab === "delivered" ? deliveredAtByOrderId : undefined}
+          isDeliveredView={tab === "delivered"}
+        />
+      </>}
   </div></AdminPage>;
 }
 
-function ListOrders({ orders, loading, search, setSearch, filter, setFilter, selected, setSelected, user, onChanged }: {
+function ListOrders({ orders, loading, search, setSearch, filter, setFilter, selected, setSelected, user, onChanged, deliveredAtByOrderId, isDeliveredView = false }: {
   orders: Order[]; loading: boolean; search: string; setSearch: (s: string) => void;
   filter: "all" | OrderStatus | "one_time" | "subscription"; setFilter: (s: any) => void;
   selected: Order | null; setSelected: (o: Order | null) => void; user: any; onChanged: () => Promise<void>;
+  deliveredAtByOrderId?: ReadonlyMap<string, Date>; isDeliveredView?: boolean;
 }) {
   const [next, setNext] = useState<OrderStatus | "">("");
   const [note, setNote] = useState("");
@@ -112,8 +167,8 @@ function ListOrders({ orders, loading, search, setSearch, filter, setFilter, sel
     try {
       await updateOrderStatus(selected, next, user.uid, user.email ?? undefined, note);
       setNote(""); setNext(""); await onChanged();
-      const fresh = (await listCollection<Order>("orders", "createdAt")).find(o => o.id === selected.id);
-      setSelected(fresh ?? null); await showSuccess("Order status updated");
+      const fresh = await getOrderById(selected.id);
+      setSelected(fresh); await showSuccess("Order status updated");
     } catch (e) { await showError(e, "Unable to update order."); }
     finally { setSaving(false); }
   }
@@ -131,7 +186,7 @@ function ListOrders({ orders, loading, search, setSearch, filter, setFilter, sel
       await addOrderPayment(selected, amount, user.uid, user.email ?? undefined, paymentTransactionId, paymentReceiptFile);
       setPaymentAmount(""); setPaymentTransactionId(""); setPaymentReceiptFile(null);
       await onChanged();
-      const fresh = (await listCollection<Order>("orders", "createdAt")).find(o => o.id === selected.id);
+      const fresh = await getOrderById(selected.id);
       setSelected(fresh ?? null);
       await showSuccess("Payment recorded successfully");
     } catch (e) {
@@ -148,7 +203,7 @@ function ListOrders({ orders, loading, search, setSearch, filter, setFilter, sel
     try {
       await refundOrderPayment(selected, user.uid, user.email ?? undefined, reason);
       await onChanged();
-      const fresh = (await listCollection<Order>("orders", "createdAt")).find(o => o.id === selected.id);
+      const fresh = await getOrderById(selected.id);
       setSelected(fresh ?? null); await showSuccess("Refund completed");
     } catch (e) { await showError(e, "Unable to refund payment."); }
     finally { setRefundSaving(false); }
@@ -158,12 +213,12 @@ function ListOrders({ orders, loading, search, setSearch, filter, setFilter, sel
     <div className="card">
       <div className="card-header py-3"><div className="row g-2 align-items-center">
         <div className="col-lg-6"><div className="input-group"><span className="input-group-text"><i className="bi bi-search" /></span><input className="form-control" placeholder="Search order, customer, mobile or subscription..." value={search} onChange={e => setSearch(e.target.value)} /></div></div>
-        <div className="col-lg-3"><select className="form-select" value={filter} onChange={e => setFilter(e.target.value)}><option value="all">All orders</option><option value="one_time">One-time</option><option value="subscription">Subscription</option>{ORDER_STATUSES.map(s => <option key={s} value={s}>{formatOrderStatus(s)}</option>)}</select></div>
+        <div className="col-lg-3"><select className="form-select" value={filter} onChange={e => setFilter(e.target.value)}><option value="all">{isDeliveredView ? "All delivered orders" : "All active orders"}</option><option value="one_time">One-time</option><option value="subscription">Subscription</option>{(isDeliveredView ? ["delivered" as OrderStatus] : ORDER_STATUSES.filter(status => ["confirmed", "preparing", "packed", "ready_for_handover", "handed_to_delivery", "out_for_delivery"].includes(status))).map(s => <option key={s} value={s}>{formatOrderStatus(s)}</option>)}</select></div>
         <div className="col-lg-3 text-lg-end small text-muted">{orders.length} order{orders.length === 1 ? "" : "s"}</div>
       </div></div>
       <div className="table-responsive"><table className="table table-hover align-middle mb-0"><thead><tr><th>Order</th><th>Customer</th><th>Type</th><th>Total</th><th>Payment</th><th>Status</th><th className="text-end">Action</th></tr></thead><tbody>
         {orders.map(o => <tr key={o.id}>
-          <td><strong>{o.orderNumber || o.id.slice(0, 8)}</strong><div className="small text-muted">{dateValue(o.createdAt)}</div></td>
+          <td><strong>{o.orderNumber || o.id.slice(0, 8)}</strong><div className="small text-muted">{isDeliveredView ? `Delivered ${dateValue(deliveredAtByOrderId?.get(o.id))}` : dateValue(o.createdAt)}</div></td>
           <td><strong>{o.customerName?.trim() || o.customerMobile || "Customer"}</strong><div className="small text-muted">{o.customerMobile || ""}</div></td>
           <td>{o.orderType === "subscription" ? <><span className="badge text-bg-primary">Subscription</span><div className="small text-muted">{o.subscriptionPlanName || ""}</div></> : <span className="badge text-bg-light border">One-time</span>}</td>
           <td><strong>{money(o.total)}</strong></td>
@@ -171,7 +226,7 @@ function ListOrders({ orders, loading, search, setSearch, filter, setFilter, sel
           <td><span className={`badge text-bg-${statusClass(o.status)}`}>{formatOrderStatus(o.status)}</span></td>
           <td className="text-end"><button className="btn btn-sm btn-primary" onClick={() => { setSelected(o); setNext(""); setNote(""); }}><i className="bi bi-eye me-1" />View Details</button></td>
         </tr>)}
-        {!orders.length && !loading && <tr><td colSpan={7} className="text-center text-muted py-5"><i className="bi bi-inbox fs-2 d-block mb-2" />No orders found.</td></tr>}
+        {!orders.length && !loading && <tr><td colSpan={7} className="text-center text-muted py-5"><i className="bi bi-inbox fs-2 d-block mb-2" />{isDeliveredView ? "No delivered orders found for this date range." : "No active orders found."}</td></tr>}
         {loading && <tr><td colSpan={7} className="text-center py-5"><span className="spinner-border spinner-border-sm me-2" />Loading orders...</td></tr>}
       </tbody></table></div>
     </div>

@@ -2,8 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
-import { confirmAction, showSuccess } from "@/lib/alerts";
+import { confirmAction, showError, showSuccess } from "@/lib/alerts";
 import { createOffer, deleteOffer, updateOffer } from "@/lib/offerService";
+import {
+  assertNoOfferDateOverlap,
+  normalizeOfferDate,
+  OFFER_DATE_OVERLAP_ERROR,
+  validateOfferDateRange,
+} from "@/lib/offerDateValidation";
 import { listCollection } from "@/lib/firestore";
 import type { Product } from "@/types/catalog";
 import type { Packaging } from "@/types/packaging";
@@ -102,8 +108,8 @@ export default function OffersPage() {
       locationType: item.locationType ?? "all",
       pincodeIds: item.pincodeIds ?? [],
       type: item.type ?? "price",
-      startDate: item.startDate ?? "",
-      endDate: item.endDate ?? "",
+      startDate: normalizeOfferDate(item.startDate) ?? "",
+      endDate: normalizeOfferDate(item.endDate) ?? "",
       active: item.active !== false,
       discountType: item.discountType ?? "percentage",
       discountValue: Number(item.discountValue ?? 0),
@@ -130,8 +136,20 @@ export default function OffersPage() {
 
     const name = form.name.trim();
     if (!name) return setError("Offer name is required.");
-    if (!form.startDate || !form.endDate) return setError("Offer start date and end date are required.");
-    if (form.startDate > form.endDate) return setError("End date cannot be before start date.");
+    let range: ReturnType<typeof validateOfferDateRange>;
+    try {
+      range = validateOfferDateRange(form.startDate, form.endDate);
+      assertNoOfferDateOverlap({
+        id: editing ?? undefined,
+        type: form.type,
+        ...range,
+      }, offers);
+    } catch (validationError) {
+      const message = validationError instanceof Error ? validationError.message : OFFER_DATE_OVERLAP_ERROR;
+      setError(message);
+      void showError(validationError, OFFER_DATE_OVERLAP_ERROR);
+      return;
+    }
     if (form.locationType === "pincode" && !form.pincodeIds.length) return setError("Select at least one pincode.");
 
     const data: Omit<Offer, "id" | "createdAt" | "updatedAt"> = {
@@ -145,8 +163,8 @@ export default function OffersPage() {
           })
         : [],
       type: form.type,
-      startDate: form.startDate,
-      endDate: form.endDate,
+      startDate: range.startDate,
+      endDate: range.endDate,
       active: form.active,
     };
 
@@ -187,6 +205,7 @@ export default function OffersPage() {
       closeForm();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to save offer.");
+      await showError(e, "Unable to save offer.");
     } finally {
       setSaving(false);
     }
@@ -373,7 +392,7 @@ export default function OffersPage() {
                     <td>{item.locationType === "all" ? "All Pincodes" : (item.pincodeLabels?.join(", ") || `${item.pincodeIds?.length ?? 0} Pincode(s)`)}</td>
                     <td>{typeLabel(item.type)}</td>
                     <td>{formatDiscount(item)}</td>
-                    <td><div>{item.startDate}</div><div className="small text-muted">to {item.endDate}</div></td>
+                    <td><div>{normalizeOfferDate(item.startDate) ?? "—"}</div><div className="small text-muted">to {normalizeOfferDate(item.endDate) ?? "—"}</div></td>
                     <td><span className={`badge text-bg-${item.active ? "success" : "secondary"}`}>{item.active ? "Active" : "Inactive"}</span></td>
                     <td className="text-end text-nowrap">
                       <button className="btn btn-sm btn-outline-primary me-1" onClick={() => openEdit(item)}><i className="bi bi-pencil me-1" />Edit</button>

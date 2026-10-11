@@ -84,7 +84,11 @@ export type GrowingBatch = {
   stockAdjustedAt?: unknown;
   stockAdjustedByUid?: string;
   stockAdjustedByEmail?: string;
+  /** Legacy: older closed batches were also flagged delivered. New closures do not set this. */
   delivered?: boolean;
+  closedAt?: unknown;
+  closedByUid?: string;
+  closedByEmail?: string;
   deliveredAt?: unknown;
   deliveredByUid?: string;
   deliveredByEmail?: string;

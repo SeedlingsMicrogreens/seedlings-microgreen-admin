@@ -130,6 +130,35 @@ Example: 100g packaging × 10 boxes → `weightGrams = 1000`; component demand i
 - A packing operation can only be cancelled or reversed before handover has occurred.
 - Once a fulfilment has been handed over, its stock deduction is not reversible unless an explicit, safe reversal flow is defined and validated by authoritative handover state.
 
+### Growing Batches listing — Sold column
+
+- Sold % = `sold / harvested × 100` (0 when harvested is zero/missing, capped at 100). The Sold column follows Harvested.
+
+### Growing Batch lifecycle rules
+
+- Remaining batch stock = `batchStockGrams` if present, else `max(0, harvested - sold)`. This is used by Inventory, reconciliation and Close Batch.
+- Close Batch (manual) records remaining stock as waste and deducts only that remainder from product stock; stock consumed by packing is never deducted again.
+- Automatic close happens at handover only when every harvested item's sold quantity is >= its harvested quantity (harvested > 0) and no stock remains; it never uses Planned.
+- Batch closure is `status: "closed"` with `closedAt/closedByUid/closedByEmail`. It does not set `delivered` and never changes order, fulfilment, delivery-assignment or subscription-delivery status. Legacy `delivered: true` batches are still treated as closed.
+- Cancelling packing (before handover only) restores product stock and the originating batch items from the fulfilment allocations, reverts the order/subscription delivery from `packed`, and cannot run twice.
+- Not Started batches (`not_started`, including the legacy `planned` alias) may be deleted only from the View Batch/details screen. The delete service re-reads the latest batch inside a Firestore transaction and blocks deletion if production/harvesting has started, lifecycle or stock history exists, or inventory-adjustment/fulfilment records reference the batch. Batch status-changing production, harvest, packing, and closure operations update the same batch document, so a concurrent lifecycle change conflicts with deletion rather than allowing an active batch to be removed.
+
+### Notifications
+
+- `lib/alerts.ts` is the single entry point. `confirmAction` and `promptText` remain SweetAlert dialogs (decision/input required).
+- `showSuccess`, `showToast`, `showWarning`, `showError` and the global error handler use the centralized SweetAlert2 toast mixin in `lib/toast.ts`: top-right, animated, manually dismissible. Success/info 3s; error and warning 5s.
+
+### Salable Product definition and pricing
+
+- A Single Product has one Microgreen component with a fixed numeric `100` share, displayed as **Quantity (%)**. Its share is 100%, not a 100g package size; selected selling-option packaging determines actual sold grams. Combo component percentages and their calculations remain unchanged.
+- Create and Update forms always include one real 100g selling option, preserving existing options and never duplicating an existing 100g option. A valid 100g option (positive MRP and price, price not above MRP) is required in both the form and Sales Product service before writes.
+- Price & Purchase is review-only. The displayed MRP/selling price follow the 100g salable option, while purchase availability retains and displays the Product's saved values.
+
+### Offers date ranges
+
+- Offers use the existing `type`, `startDate`, and `endDate` fields. Date ranges are inclusive; ranges of the same type may not overlap, while different types may overlap.
+- The Offers form reports date-ordering and overlap errors through the centralized SweetAlert2 error toast. The service revalidates writes against current Firestore offers while serializing saves by offer type.
+
 ## 5. Inventory and fulfilment
 
 Inventory is canonical in grams.
@@ -243,3 +272,20 @@ Customer subscriptions are separate from plan masters and store customer-facing 
 - Root cause identified for `Cannot read properties of undefined (reading 'path')`: `transaction.get()` was being called with an `inventoryAdjustments` Query. The Firestore Web SDK transaction path expects a document reference for this operation.
 - Waste history is now fetched with `getDocs()` before the transaction.
 - Product documents continue to be read through transaction document references, then Product stock, batch Stock, and waste adjustment history are written atomically.
+
+### Inventory Adjustment History Display
+- Adjustment History is shown only for a selected batch and includes only records carrying that batch ID.
+- The table displays Before, signed Qty, and After in that order, without a Created By column. Stored adjustment data, stock calculations, creator/audit records, and other adjustment details remain unchanged.
+
+### Orders — Active and Delivered Listings
+- Active Orders are restricted to confirmed lifecycle statuses (`confirmed`, `preparing`, `packed`, `ready_for_handover`, `handed_to_delivery`, `out_for_delivery`) and existing successful payment states (`paid`, `partially_paid`). Pending-payment, paid-but-unconfirmed, failed/refunded, delivered, and cancelled orders are excluded.
+- Delivered Orders require both the order and delivery assignment to be `delivered`. Delivery date filtering uses the assignment's `updatedAt`, which the delivery status transaction sets when it records the `delivered` transition.
+- The Delivered tab defaults to the current local calendar day and previous six days, inclusive. Queries constrain delivery-assignment timestamps in Firestore and fetch only the linked order documents.
+
+### Fulfilment — Confirmed Paid Orders and Fixed Order Packaging
+- Fulfilment order queries are restricted to payment `paid` and packable parent order statuses; pending/failed/refunded/cancelled/delivered orders are excluded. Subscription packing additionally requires an active parent subscription and that order's own scheduled delivery to remain `pending`.
+- Packaging grams and box counts come from the confirmed order line (`weightGrams`, `quantity`, and saved packed progress) and are display-only in the packing worksheet.
+- The packing transaction re-reads the parent order and subscription delivery, then rejects payment/status changes or client-provided package/box values that differ from the authoritative remaining order quantities before stock allocation or deduction.
+
+### Delivery Button Label
+- The existing delivery assignment action keeps its `delivered` status update and workflow; its visible label is **Mark as Delivered**.

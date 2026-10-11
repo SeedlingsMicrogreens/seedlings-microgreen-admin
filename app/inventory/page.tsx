@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { listCollection } from "@/lib/firestore";
+import { isBatchClosed, itemRemainingStockGrams } from "@/lib/batchAccounting";
 import { closeGrowingBatchFromInventory, updateGrowingBatchSoldQuantity } from "@/lib/growingBatchService";
+import { adjustmentsForBatch, formatAdjustmentQuantity } from "@/lib/inventoryAdjustmentDisplay";
 import { confirmAction, showError, showToast } from "@/lib/alerts";
 import { useAuth } from "@/components/auth/AuthProvider";
 import type { InventoryAdjustment, Product } from "@/types/catalog";
@@ -41,14 +43,12 @@ export default function InventoryPage() {
   const lowStock = products.filter(p => Number(p.stockGrams ?? p.stock ?? 0) <= Number(p.lowStockThresholdGrams ?? p.lowStockThreshold ?? 0) && p.status !== "inactive");
   const eligibleBatches = batches.filter(batch =>
     !batch.stockAdjusted &&
-    !batch.delivered &&
+    !isBatchClosed(batch) &&
     (batch.items ?? []).some(item => item.status === "completed_harvested" || item.status === "failed")
   );
   const selectedBatch = eligibleBatches.find(batch => batch.id === selectedBatchId) ?? null;
   const selectedBatchItems = (selectedBatch?.items ?? []).filter(item => item.status === "completed_harvested" || item.status === "failed");
-  const selectedBatchAdjustments = selectedBatchId
-    ? adjustments.filter(adjustment => adjustment.growingBatchId === selectedBatchId)
-    : adjustments;
+  const selectedBatchAdjustments = adjustmentsForBatch(adjustments, selectedBatch?.id);
   function batchStatusLabel(status: GrowingBatch["status"]) {
     return status.replaceAll("_", " ").replace(/\b\w/g, value => value.toUpperCase());
   }
@@ -139,7 +139,7 @@ ${detail}`);
                 <option value="">Select harvested batch...</option>
                 {eligibleBatches.map(batch => <option key={batch.id} value={batch.id}>{batch.batchNumber} · {batch.locationName || "No location"} ({batchStatusLabel(batch.status)})</option>)}
               </select>
-              <div className="form-text">Batches already adjusted or marked delivered are automatically hidden.</div>
+              <div className="form-text">Batches already adjusted or closed are automatically hidden.</div>
             </div>
           </div>
           {selectedBatch && <div className="mt-4">
@@ -147,7 +147,7 @@ ${detail}`);
             <div className="table-responsive"><table className="table table-sm align-middle mb-3"><thead><tr><th>Microgreen</th><th>Harvested</th><th>Loss</th><th>Stock</th><th style={{width:180}}>Sold quantity (gms)</th><th style={{width:160}}>Waste adjustment (gms)</th><th style={{width:140}}>Total Waste (gms)</th></tr></thead><tbody>
               {selectedBatchItems.map(item => {
                 const harvested = Math.max(0, Number(item.actualYieldGrams ?? 0));
-                const batchStock = Math.max(0, Number(item.batchStockGrams ?? harvested - Number(item.soldQuantityGrams ?? 0)));
+                const batchStock = itemRemainingStockGrams(item);
                 const sold = Math.max(0, Number(item.soldQuantityGrams ?? 0));
                 const waste = Math.max(0, Number(wasteQuantities[item.id] ?? 0));
                 const wasteAdjustments = selectedBatchAdjustments.filter(adjustment =>
@@ -211,22 +211,22 @@ ${detail}`);
           </div>
         </div>
 
-        <div className="col-12">
+        {selectedBatch && <div className="col-12">
           <div className="card">
-            <div className="card-header"><h3 className="card-title">Adjustment history{selectedBatch ? ` · ${selectedBatch.batchNumber}` : ""}</h3></div>
+            <div className="card-header"><h3 className="card-title">Adjustment history · {selectedBatch.batchNumber}</h3></div>
             <div className="card-body table-responsive p-0">
               <table className="table table-sm table-hover mb-0">
-                <thead><tr><th>Product</th><th>Type</th><th>Qty (gms)</th><th>Before (gms)</th><th>After (gms)</th><th>Reason</th><th>Created by</th></tr></thead>
+                <thead><tr><th>Product</th><th>Type</th><th>Before (gms)</th><th>Qty (gms)</th><th>After (gms)</th><th>Reason</th></tr></thead>
                 <tbody>{selectedBatchAdjustments.map(a => <tr key={a.id}>
-                  <td>{a.productName}</td><td>{a.type}</td><td>{Number(a.quantity ?? 0).toLocaleString()} gms</td><td>{Number(a.previousStock ?? 0).toLocaleString()} gms</td><td>{Number(a.newStock ?? 0).toLocaleString()} gms</td>
-                  <td>{a.reason}</td><td>{a.createdByEmail || a.createdByUid}</td>
+                  <td>{a.productName}</td><td>{a.type}</td><td>{Number(a.previousStock ?? 0).toLocaleString()} gms</td><td>{formatAdjustmentQuantity(a)}</td><td>{Number(a.newStock ?? 0).toLocaleString()} gms</td>
+                  <td>{a.reason}</td>
                 </tr>)}
-                {!selectedBatchAdjustments.length && <tr><td colSpan={7} className="text-center text-muted py-4">{selectedBatchId ? "No adjustments for this batch yet." : "No adjustments yet."}</td></tr>}
+                {!selectedBatchAdjustments.length && <tr><td colSpan={6} className="text-center text-muted py-4">No adjustments for this batch yet.</td></tr>}
                 </tbody>
               </table>
             </div>
           </div>
-        </div>
+        </div>}
       </div>
     </div>
   </AdminPage>;

@@ -1,27 +1,23 @@
 "use client";
 
 import { useEffect } from "react";
-import Swal from "sweetalert2";
 import { errorMessage } from "@/lib/alerts";
+import { showToastNotification } from "@/lib/toast";
 
 export function GlobalErrorHandler() {
   useEffect(() => {
     const onUnhandledRejection = (event: PromiseRejectionEvent) => {
       event.preventDefault();
-      void Swal.fire({
-        icon: "error",
+      showToastNotification("error", {
         title: "Unexpected error",
-        text: errorMessage(event.reason, "An unexpected operation failed. Please try again."),
-        confirmButtonText: "OK"
+        message: errorMessage(event.reason, "An unexpected operation failed. Please try again."),
       });
     };
 
     const onError = (event: ErrorEvent) => {
-      void Swal.fire({
-        icon: "error",
+      showToastNotification("error", {
         title: "Unexpected error",
-        text: errorMessage(event.error, event.message || "An unexpected error occurred."),
-        confirmButtonText: "OK"
+        message: errorMessage(event.error, event.message || "An unexpected error occurred."),
       });
     };
 

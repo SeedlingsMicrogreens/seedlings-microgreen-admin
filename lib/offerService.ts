@@ -1,18 +1,96 @@
-import { createRecord, deleteRecord, updateRecord } from "./firestore";
-import type { Offer } from "@/types/offer";
+import {
+  collection,
+  doc,
+  getDocs,
+  runTransaction,
+  serverTimestamp,
+  type DocumentReference,
+} from "firebase/firestore";
+import { db } from "./firebase";
+import { auditEvent, deleteRecord } from "./firestore";
+import { assertNoOfferDateOverlap, validateOfferDateRange } from "./offerDateValidation";
+import type { Offer, OfferType } from "@/types/offer";
 
 export async function createOffer(input: Omit<Offer, "id" | "createdAt" | "updatedAt">) {
   validateOffer(input);
-  return createRecord("offers", input as Record<string, unknown>);
+  const range = validateOfferDateRange(input.startDate, input.endDate);
+  const offerRef = doc(collection(db, "offers"));
+
+  await runTransaction(db, async transaction => {
+    const lockRef = offerTypeLockRef(input.type);
+    const lockSnapshot = await transaction.get(lockRef);
+    const existingOffers = await getDocs(collection(db, "offers"));
+    const records = existingOffers.docs.map(snapshot => ({
+      id: snapshot.id,
+      ...(snapshot.data() as Omit<Offer, "id">),
+    })) as Offer[];
+    assertNoOfferDateOverlap({ ...input, ...range }, records);
+
+    transaction.set(lockRef, {
+      revision: Number(lockSnapshot.data()?.revision ?? 0) + 1,
+      updatedAt: serverTimestamp(),
+    });
+    transaction.set(offerRef, {
+      ...input,
+      ...range,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  await auditEvent("create", "offers", offerRef.id, `Created offer ${input.name}`);
+  return offerRef;
 }
 
 export async function updateOffer(id: string, input: Partial<Offer>) {
-  validateOffer(input as Offer, true);
-  return updateRecord("offers", id, input as Record<string, unknown>);
+  validateOffer(input, true);
+  const offerRef = doc(db, "offers", id);
+  let offerName = input.name?.trim() || "offer";
+
+  await runTransaction(db, async transaction => {
+    const offerSnapshot = await transaction.get(offerRef);
+    if (!offerSnapshot.exists()) throw new Error("Offer no longer exists.");
+    const existing = {
+      id: offerSnapshot.id,
+      ...(offerSnapshot.data() as Omit<Offer, "id">),
+    } as Offer;
+    const updated = { ...existing, ...input };
+    offerName = updated.name;
+    validateOffer(updated);
+    const range = validateOfferDateRange(updated.startDate, updated.endDate);
+
+    const lockTypes = [...new Set([existing.type, updated.type])].sort();
+    const lockRefs = lockTypes.map(offerTypeLockRef);
+    const lockSnapshots = await Promise.all(lockRefs.map(ref => transaction.get(ref)));
+    const existingOffers = await getDocs(collection(db, "offers"));
+    const records = existingOffers.docs.map(snapshot => ({
+      id: snapshot.id,
+      ...(snapshot.data() as Omit<Offer, "id">),
+    })) as Offer[];
+    assertNoOfferDateOverlap({ ...updated, ...range }, records);
+
+    lockRefs.forEach((lockRef, index) => {
+      transaction.set(lockRef, {
+        revision: Number(lockSnapshots[index].data()?.revision ?? 0) + 1,
+        updatedAt: serverTimestamp(),
+      });
+    });
+    transaction.update(offerRef, {
+      ...input,
+      ...range,
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  await auditEvent("update", "offers", id, `Updated offer ${offerName}`);
 }
 
 export async function deleteOffer(id: string) {
   return deleteRecord("offers", id);
+}
+
+function offerTypeLockRef(type: OfferType): DocumentReference {
+  return doc(db, "offerTypeLocks", type);
 }
 
 function validateOffer(input: Partial<Offer>, partial = false) {
@@ -27,13 +105,14 @@ function validateOffer(input: Partial<Offer>, partial = false) {
   }
 
   if (!partial || input.startDate !== undefined || input.endDate !== undefined) {
-    if (input.startDate && input.endDate && input.startDate > input.endDate) {
-      throw new Error("End date cannot be before start date.");
-    }
+    if (!input.startDate || !input.endDate) throw new Error("Offer start date and end date are required.");
+    validateOfferDateRange(input.startDate, input.endDate);
   }
 
   if (!partial || input.type !== undefined) {
-    if (!input.type) throw new Error("Offer type is required.");
+    if (input.type !== "price" && input.type !== "deliveryCharge" && input.type !== "quantity") {
+      throw new Error("Offer type is required.");
+    }
   }
 
   if (input.type === "price" || input.type === "deliveryCharge") {

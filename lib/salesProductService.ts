@@ -1,8 +1,9 @@
-import { collection, getDocs } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs } from "firebase/firestore";
 import { db } from "./firebase";
 import { createRecord, deleteRecord, listCollection, updateRecord } from "./firestore";
+import { validateRequired100gSellingOption, validateSingleComponentShare } from "./salesProductOptions";
 import type { Product } from "@/types/catalog";
-import type { SalesProduct, SalesProductComponent, SalesProductType } from "@/types/salesProduct";
+import type { SalesProduct, SalesProductComponent, SalesProductSellingOption, SalesProductType } from "@/types/salesProduct";
 
 export function validateSalesProduct(input: {
   name: string;
@@ -10,12 +11,15 @@ export function validateSalesProduct(input: {
   sku?: string;
   type: SalesProductType;
   components: SalesProductComponent[];
+  sellingOptions: SalesProductSellingOption[];
   mrp: number;
   sellingPrice: number;
   oneTimePurchase: boolean;
   subscriptionPurchase: boolean;
 }) {
   if (!input.name.trim()) throw new Error("Sales product name is required.");
+  validateRequired100gSellingOption(input.sellingOptions);
+  validateSingleComponentShare(input.type, input.components);
   if (!input.imageUrl?.trim()) throw new Error("Product image is required for a Salable Product.");
   if (input.sku !== undefined && !input.sku.trim()) throw new Error("SKU cannot be blank.");
   if (!Number.isFinite(input.mrp) || input.mrp <= 0) {
@@ -67,10 +71,17 @@ export async function listSalesProducts() {
 }
 
 export async function createSalesProduct(data: Omit<SalesProduct, "id" | "createdAt" | "updatedAt">) {
+  validateRequired100gSellingOption(data.sellingOptions);
+  validateSingleComponentShare(data.type, data.components);
   return createRecord("salesProducts", data as Record<string, unknown>);
 }
 
 export async function updateSalesProduct(id: string, data: Partial<Omit<SalesProduct, "id" | "createdAt" | "updatedAt">>) {
+  const snapshot = await getDoc(doc(db, "salesProducts", id));
+  if (!snapshot.exists()) throw new Error("Product no longer exists.");
+  const current = snapshot.data() as SalesProduct;
+  validateRequired100gSellingOption(data.sellingOptions ?? current.sellingOptions);
+  validateSingleComponentShare(data.type ?? current.type, data.components ?? current.components);
   return updateRecord("salesProducts", id, data as Record<string, unknown>);
 }
 

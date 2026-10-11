@@ -1,15 +1,23 @@
-import { collection, doc, getDoc, getDocs, orderBy, query, runTransaction, serverTimestamp, where, arrayUnion, type Transaction } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, orderBy, query, runTransaction, serverTimestamp, where, arrayUnion, deleteField, type Transaction } from "firebase/firestore";
 import { db } from "./firebase";
 import { auditEvent } from "./firestore";
 import type { Product } from "@/types/catalog";
 import type { SalesProduct } from "@/types/salesProduct";
-import type { Order, OrderItem, OrderStatus } from "@/types/order";
+import type { Order, OrderItem } from "@/types/order";
 import type { GrowingBatch } from "@/types/growingBatch";
 import type { Subscription } from "@/types/subscription";
 import type { Fulfilment, FulfilmentPackLine, FulfilmentAllocation, PackingItem } from "@/types/fulfilment";
 import type { SubscriptionDelivery } from "@/types/subscriptionDelivery";
+import { isBatchClosed, itemRemainingStockGrams, packingStatusFromItems, productTotalsToRestore, restoreBatchItemStock, reverseOrderItemPacking, statusBeforePacked } from "./batchAccounting";
 import { sendTransactionNotification } from "./notificationService";
 import { buildPackingIdempotencyKey, componentGramsPerBox, requiredItemGrams, samePackingSnapshot } from "./packingMath";
+import {
+  FULFILMENT_ORDER_QUERY_STATUSES,
+  isPaidFulfilmentOrder,
+  isPackableOrder,
+  isSubscriptionDeliveryPackable,
+  validateAuthoritativePackLines,
+} from "./fulfilmentEligibility";
 
 function numberValue(value: unknown) {
   const n = Number(value ?? 0);
@@ -17,10 +25,6 @@ function numberValue(value: unknown) {
 }
 
 export { buildPackingIdempotencyKey, componentGramsPerBox, requiredItemGrams, samePackingSnapshot } from "./packingMath";
-
-function orderStatusCanBePacked(status: OrderStatus) {
-  return !["pending_payment", "cancelled", "delivered", "handed_to_delivery", "out_for_delivery"].includes(status);
-}
 
 function nextSubscriptionDeliveryDate(subscription: Subscription, deliveryDate: string, deliveryNumber: number) {
   const total = Number(subscription.totalDeliveries || 0);
@@ -130,16 +134,33 @@ export async function packOrderFulfilment(
     if (!orderSnap.exists()) throw new Error("Order no longer exists. Refresh and retry.");
     const currentOrder = { id: orderSnap.id, ...(orderSnap.data() as Omit<Order, "id">) } as Order;
 
-    if (!orderStatusCanBePacked(currentOrder.status)) {
-      throw new Error(`Order ${currentOrder.orderNumber || orderId} cannot be packed from status ${currentOrder.status}.`);
+    if (!isPackableOrder(currentOrder)) {
+      throw new Error(`Order ${currentOrder.orderNumber || orderId} must be fully paid and confirmed before packing.`);
     }
     if (currentOrder.packingStatus === "packed" || currentOrder.status === "packed") {
       throw new Error("This order is already fully packed.");
     }
 
-    const subscriptionSnap = currentOrder.orderType === "subscription" && currentOrder.sourceSubscriptionId
+    const isSubscriptionOrder = currentOrder.orderType === "subscription" || Boolean(currentOrder.sourceSubscriptionId);
+    if (isSubscriptionOrder && (!currentOrder.sourceSubscriptionId || currentOrder.orderType !== "subscription")) {
+      throw new Error("Subscription order details are incomplete.");
+    }
+    const subscriptionSnap = isSubscriptionOrder && currentOrder.sourceSubscriptionId
       ? await transaction.get(doc(db, "subscriptions", currentOrder.sourceSubscriptionId))
       : null;
+    if (isSubscriptionOrder) {
+      if (!subscriptionSnap?.exists()) throw new Error("Source subscription not found.");
+      const subscription = { id: subscriptionSnap.id, ...(subscriptionSnap.data() as Omit<Subscription, "id">) } as Subscription;
+      const deliveryNumber = Math.max(0, Math.round(numberValue(currentOrder.sourceSubscriptionDeliveryNumber || 0)))
+        || Math.max(1, Math.round(numberValue(subscription.deliveriesGenerated || 0)) + 1);
+      const deliveryRef = doc(db, "subscriptionDeliveries", `${subscription.id}_${deliveryNumber}`);
+      const deliverySnap = await transaction.get(deliveryRef);
+      if (!deliverySnap.exists()) throw new Error("The scheduled subscription delivery no longer exists.");
+      const delivery = { id: deliverySnap.id, ...(deliverySnap.data() as Omit<SubscriptionDelivery, "id">) } as SubscriptionDelivery;
+      if (!isSubscriptionDeliveryPackable(currentOrder, subscription, delivery)) {
+        throw new Error("Only an active subscription's pending scheduled delivery can be packed.");
+      }
+    }
 
     const salesProducts = new Map<string, SalesProduct>();
     salesSnap.docs.forEach(snap => salesProducts.set(snap.id, { id: snap.id, ...(snap.data() as Omit<SalesProduct, "id">) }));
@@ -148,24 +169,10 @@ export async function packOrderFulfilment(
     const batchSnaps = await Promise.all(batchRefs.map(ref => transaction.get(ref)));
     const batches = batchSnaps.map(snap => ({ id: snap.id, ...(snap.data() as Omit<GrowingBatch, "id">) })) as GrowingBatch[];
 
-    if (currentOrder.orderType === "subscription" && currentOrder.sourceSubscriptionId && !subscriptionSnap?.exists()) {
-      throw new Error("Source subscription not found.");
-    }
-
-    const cleanLines = lines.map(line => ({
-      orderItemIndex: Math.round(Number(line.orderItemIndex)),
-      boxGrams: Math.round(Number(line.boxGrams)),
-      boxesPacked: Math.round(Number(line.boxesPacked)),
-    }));
-    const seen = new Set<number>();
+    const cleanLines = validateAuthoritativePackLines(currentOrder, lines);
     for (const line of cleanLines) {
-      if (seen.has(line.orderItemIndex)) throw new Error("Each order item can appear only once in the packing worksheet.");
-      seen.add(line.orderItemIndex);
       if (!Number.isInteger(line.boxGrams) || line.boxGrams <= 0 || !packagingSizes.has(line.boxGrams)) {
         throw new Error(`Packaging ${line.boxGrams}g is not an active Packaging Master size.`);
-      }
-      if (!Number.isInteger(line.boxesPacked) || line.boxesPacked <= 0) {
-        throw new Error("Packed box quantity must be a positive whole number.");
       }
     }
 
@@ -249,13 +256,13 @@ export async function packOrderFulfilment(
     }
 
     const batchWorking = batches
-      .filter(batch => batch.status === "completed_harvested" && !batch.delivered)
+      .filter(batch => batch.status === "completed_harvested" && !isBatchClosed(batch))
       .sort((a, b) => String(a.harvestDate || a.createdAt || "").localeCompare(String(b.harvestDate || b.createdAt || "")))
       .map(batch => ({
         batch,
         items: (batch.items ?? []).map(item => ({
           item,
-          available: Math.max(0, Math.round(numberValue(item.batchStockGrams !== undefined ? item.batchStockGrams : item.actualYieldGrams))),
+          available: itemRemainingStockGrams(item),
         })),
       }));
 
@@ -397,6 +404,17 @@ export async function listManualFulfilments() {
   return snapshot.docs.map(item => ({ id: item.id, ...(item.data() as Omit<Fulfilment, "id">) })) as Fulfilment[];
 }
 
+export async function listFulfilmentOrders(): Promise<Order[]> {
+  const snapshot = await getDocs(query(
+    collection(db, "orders"),
+    where("status", "in", [...FULFILMENT_ORDER_QUERY_STATUSES]),
+  ));
+
+  return snapshot.docs
+    .map(item => ({ id: item.id, ...(item.data() as Omit<Order, "id">) }))
+    .filter(isPaidFulfilmentOrder);
+}
+
 export async function cancelFulfilmentPacking(
   fulfilmentId: string,
   uid: string,
@@ -426,11 +444,15 @@ export async function cancelFulfilmentPacking(
   }
 
   await runTransaction(db, async transaction => {
+    // All reads first, then all writes.
     const freshFulfilment = await transaction.get(fulfilmentRef);
     if (!freshFulfilment.exists()) throw new Error("Packing record no longer exists during reversal.");
 
     const fresh = { id: freshFulfilment.id, ...(freshFulfilment.data() as Omit<Fulfilment, "id">) } as Fulfilment;
     if (fresh.status === "cancelled") throw new Error("This packing operation has already been cancelled.");
+    if (fresh.status !== "packed" && fresh.status !== "partially_packed") {
+      throw new Error("This packing operation cannot be deleted or cancelled because it has already been handed over.");
+    }
 
     const freshOrderSnap = await transaction.get(orderRef);
     if (!freshOrderSnap.exists()) throw new Error("Order no longer exists during reversal.");
@@ -439,27 +461,75 @@ export async function cancelFulfilmentPacking(
       throw new Error("This packing operation cannot be deleted or cancelled because it has already been handed over.");
     }
 
-    const itemTotals = new Map<string, number>();
-    for (const item of fresh.items ?? []) {
-      for (const component of item.components ?? []) {
-        itemTotals.set(component.productId, (itemTotals.get(component.productId) ?? 0) + component.totalGrams);
-      }
+    const deliveryRef = fresh.subscriptionDeliveryId ? doc(db, "subscriptionDeliveries", fresh.subscriptionDeliveryId) : null;
+    const deliverySnap = deliveryRef ? await transaction.get(deliveryRef) : null;
+    const deliveryStatus = deliverySnap?.exists() ? String(deliverySnap.data()?.status ?? "") : "";
+    if (deliveryStatus && !["pending", "packed"].includes(deliveryStatus)) {
+      throw new Error("This packing operation cannot be deleted or cancelled because it has already been handed over.");
     }
 
-    for (const [productId, quantity] of itemTotals) {
-      const productRef = doc(db, "products", productId);
-      const productSnap = await transaction.get(productRef);
-      if (!productSnap.exists()) continue;
-      const product = { id: productSnap.id, ...(productSnap.data() as Omit<Product, "id">) } as Product;
+    // Restore each allocation to the batch item it was taken from.
+    const restoreByBatch = new Map<string, Map<string, number>>();
+    for (const allocation of fresh.allocations ?? []) {
+      const qty = Math.max(0, Math.round(numberValue(allocation.quantityGrams)));
+      if (!qty || !allocation.growingBatchId || !allocation.growingBatchItemId) continue;
+      const perItem = restoreByBatch.get(allocation.growingBatchId) ?? new Map<string, number>();
+      perItem.set(allocation.growingBatchItemId, (perItem.get(allocation.growingBatchItemId) ?? 0) + qty);
+      restoreByBatch.set(allocation.growingBatchId, perItem);
+    }
+    const batchRefs = [...restoreByBatch.keys()].map(id => doc(db, "growingBatches", id));
+    const batchSnaps = await Promise.all(batchRefs.map(ref => transaction.get(ref)));
+    const batchUpdates: Array<{ ref: (typeof batchRefs)[number]; items: GrowingBatch["items"] }> = [];
+    batchSnaps.forEach((snap, index) => {
+      if (!snap.exists()) return;
+      const batch = { id: snap.id, ...(snap.data() as Omit<GrowingBatch, "id">) } as GrowingBatch;
+      if (isBatchClosed(batch)) {
+        throw new Error(`This packing operation cannot be cancelled because batch ${batch.batchNumber} has already been closed.`);
+      }
+      batchUpdates.push({ ref: batchRefs[index], items: restoreBatchItemStock(batch.items ?? [], restoreByBatch.get(snap.id) ?? new Map()) });
+    });
+
+    const productTotals = productTotalsToRestore(fresh);
+    const productEntries: Array<{ productId: string; quantity: number; ref: ReturnType<typeof doc>; snap: Awaited<ReturnType<typeof transaction.get>> }> = [];
+    for (const [productId, quantity] of productTotals) {
+      if (quantity <= 0) continue;
+      const ref = doc(db, "products", productId);
+      productEntries.push({ productId, quantity, ref, snap: await transaction.get(ref) });
+    }
+
+    const rebuiltItems = reverseOrderItemPacking(freshOrder.items ?? [], fresh.items ?? []);
+    const nextPackingStatus = packingStatusFromItems(rebuiltItems);
+    const orderPatch: Record<string, unknown> = {
+      items: rebuiltItems,
+      packingStatus: nextPackingStatus,
+      updatedAt: serverTimestamp(),
+    };
+    if (freshOrder.status === "packed") {
+      const restoredStatus = statusBeforePacked(freshOrder.statusHistory);
+      orderPatch.status = restoredStatus;
+      orderPatch.packedAt = deleteField();
+      orderPatch.packedByUid = deleteField();
+      orderPatch.packedByEmail = deleteField();
+      orderPatch.statusHistory = arrayUnion({
+        status: restoredStatus,
+        changedByUid: uid,
+        changedByEmail: email ?? "",
+        note: "Packing cancelled before handover.",
+        changedAt: new Date(),
+      });
+    }
+
+    for (const { productId, quantity, ref, snap } of productEntries) {
+      if (!snap.exists()) continue;
+      const product = { id: productId, ...(snap.data() as Omit<Product, "id">) } as Product;
       const previous = Math.max(0, numberValue(product.stockGrams ?? product.stock));
-      const restored = Math.max(0, previous + Math.max(0, quantity));
-      transaction.update(productRef, {
+      const restored = previous + quantity;
+      transaction.update(ref, {
         stockGrams: restored,
         stock: restored,
         updatedAt: serverTimestamp(),
       });
-      const adjustmentRef = doc(collection(db, "inventoryAdjustments"));
-      transaction.set(adjustmentRef, {
+      transaction.set(doc(collection(db, "inventoryAdjustments")), {
         productId,
         productName: product.name,
         type: "fulfilment_reversal",
@@ -469,23 +539,27 @@ export async function cancelFulfilmentPacking(
         newStock: restored,
         reason: `Packing reversal for ${fresh.orderNumber || fresh.orderId}`,
         orderId: fresh.orderId,
+        fulfilmentId: fresh.id,
         createdByUid: uid,
         createdByEmail: email ?? "",
         createdAt: serverTimestamp(),
       });
     }
 
-    const rebuiltItems = (freshOrder.items ?? []).map(item => ({
-      ...item,
-      packedGrams: 0,
-      packedBoxes: 0,
-    }));
+    for (const update of batchUpdates) {
+      transaction.update(update.ref, { items: update.items, updatedAt: serverTimestamp() });
+    }
 
-    transaction.update(orderRef, {
-      items: rebuiltItems,
-      packingStatus: "pending",
-      updatedAt: serverTimestamp(),
-    });
+    transaction.update(orderRef, orderPatch);
+
+    if (deliveryRef && deliverySnap?.exists()) {
+      transaction.update(deliveryRef, {
+        status: "pending",
+        updatedAt: serverTimestamp(),
+        lastUpdatedByUid: uid,
+        lastUpdatedByEmail: email ?? "",
+      });
+    }
 
     transaction.update(fulfilmentRef, {
       status: "cancelled",
@@ -497,6 +571,7 @@ export async function cancelFulfilmentPacking(
     });
   });
 
+  await auditEvent("cancel_packing", "fulfilments", fulfilmentId, `Cancelled packing for order ${current.orderNumber || current.orderId}; stock restored to products and originating batches.`);
   return { cancelled: true };
 }
 

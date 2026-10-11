@@ -1,3 +1,56 @@
+## Fulfilment — Confirmed Paid Orders and Read-Only Packaging
+- Restrict the Fulfilment order query and operational lists to fully paid, eligible order lifecycles; subscription packing also checks the active parent subscription and the specific pending delivery.
+- Make order packaging size and remaining box counts read-only and validate them against the latest order snapshot in the packing transaction. Existing inventory allocation and handover deductions remain unchanged.
+
+## Orders — Active and Delivered Listings
+- Restrict Active Orders to confirmed, non-terminal statuses and paid/partially-paid records; add a Delivered tab with an inclusive local-calendar date range defaulting to the previous seven days.
+- Delivered filtering uses the delivered assignment's transition timestamp and requires the linked order to have delivered status. No order, payment, fulfilment, or delivery lifecycle data is rewritten.
+
+## Inventory Adjustment History Display
+- Hide batch-specific Adjustment History until a batch is selected; filter visible history to that batch.
+- Reorder quantity between Before and After, show the adjustment direction with a single sign, and remove Created By from this table only. No stored quantities or stock accounting behavior changed.
+
+## Delivery — Mark as Delivered Button Label
+- Renamed the existing delivery status action button from **Delivered** to **Mark as Delivered**. Its click handler and delivery workflow are unchanged.
+
+## Centralized Toast Notifications
+
+- Informational/success messages (`showSuccess`, `showToast`) now appear as top-right animated toasts and auto-dismiss after ~3 seconds; errors (`showError`, global error handler) and warnings (`showWarning`) auto-dismiss after ~5 seconds. The exact error message is preserved.
+- Toasts are rendered through SweetAlert2's built-in `toast: true` mixin in `lib/toast.ts`; no separate custom toast DOM manager is maintained. Toasts use top-right positioning, SweetAlert2 icons/animation, timer progress, and manual dismissal.
+- Confirmation (`confirmAction`) and input (`promptText`) SweetAlert dialogs are unchanged. Toast helpers no longer wait for a click, so callers that `await` them continue immediately.
+
+## Not Started Batch Deletion
+
+- Growing Batch details now shows **Delete Batch** only for Not Started batches (`not_started`, including the legacy `planned` alias); the listing page is unchanged.
+- Deletion uses the existing SweetAlert confirmation and centralized success/error toasts.
+- The service re-reads the latest batch in a Firestore transaction and rejects started production/harvesting, lifecycle or stock history, inventory adjustments, and fulfilment allocations. Concurrent lifecycle operations update the same batch document and therefore conflict with deletion.
+
+## Sales Products — Single Quantity and Required 100g Option
+
+- Single Product component quantity is fixed at numeric `100`, labeled as a percentage, and recorded as a 100% component share rather than interpreted as package grams. Combo component behavior is unchanged.
+- Price & Purchase values are read-only; displayed MRP and selling price follow the 100g salable option and update as that option is edited.
+- Create and Update forms initialize one actual 100g option when missing, preserve all existing options and values, and never duplicate the 100g option.
+- UI and service validation reject saves without a complete, valid 100g option.
+
+## Offers — Prevent Same-Type Date Overlaps
+
+- Offer create/update validates normalized date ranges inclusively and rejects overlaps with another offer of the same type. Offers of different types may overlap; updates exclude the offer being edited.
+- Offers Master shows overlap/date validation failures through the existing centralized SweetAlert2 error toast.
+- Service-level transactional checks serialize offer saves by type and re-read stored offers before writing, preventing concurrent callers from bypassing overlap validation.
+
+## Growing Batch Lifecycle and Inventory Fixes
+
+- **Auto-close uses Harvested.** Handover closes a batch only when every harvested item has `soldQuantityGrams >= actualYieldGrams` (harvested > 0), no item is still unharvested, and no stock remains unreconciled. Planned yield is no longer used.
+- **Single remaining-stock rule.** `batchStockGrams` if present, otherwise `harvested - sold` (never negative). Inventory display, reconciliation and Close Batch all use it, so closing a never-packed batch records the real remainder as waste and reduces product stock by that remainder only. Packed quantities are not waste, so nothing is deducted twice.
+- **Cancel packing.** Restores product stock and the originating batch items from the fulfilment's recorded allocations, reverses only that fulfilment's order-item quantities, resets `packingStatus`, reverts a `packed` order to its pre-packed status, resets the subscription delivery to `pending`, and is blocked on repeat, after handover/delivery, or if an allocated batch is already closed.
+- **Closure is not delivery.** Closing a batch sets `status: "closed"`, `closedAt`, `closedByUid`, `closedByEmail`; it no longer sets `delivered`. Existing records with `delivered: true` are still treated as closed.
+
+## Growing Batches Listing — Sold Percentage
+
+- The Sold percentage and progress bar in the Growing Batches listing are now calculated against **Harvested** quantity (`sold / harvested × 100`), not Planned.
+- Zero or missing harvested quantity shows 0%; the percentage is capped at 100%.
+- The Sold column now appears immediately after Harvested (Active and Closed tabs). Display-only change; inventory, sales, and batch closing logic are unchanged.
+
 ## Closed Batch — Harvest action visibility
 - The Harvest button is now hidden when viewing a closed batch.
 - Closed batches remain view-only and cannot start another harvest operation.

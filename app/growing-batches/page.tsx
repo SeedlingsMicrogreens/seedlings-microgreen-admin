@@ -11,9 +11,11 @@ import {
   buildBatchItem,
   calculateGrowingPhaseDates,
   createGrowingBatch,
+  deleteNotStartedGrowingBatch,
   harvestGrowingBatchItem,
   updateGrowingBatchBeforeStart,
 } from "@/lib/growingBatchService";
+import { soldPercentOfHarvested } from "@/lib/growingBatchListing";
 import { confirmAction, showError, showSuccess } from "@/lib/alerts";
 import type { Product } from "@/types/catalog";
 import type { GrowingBatch, GrowingBatchItem, GrowingBatchPhaseStatus } from "@/types/growingBatch";
@@ -242,6 +244,11 @@ export default function GrowingBatchesPage() {
       uid={user.uid}
       email={user.email ?? undefined}
       onBack={() => setTab("list")}
+      onDeleted={async () => {
+        setSelected(null);
+        await load();
+        setTab("list");
+      }}
       onSaved={async () => {
         await load();
         const fresh = (await listCollection<GrowingBatch>("growingBatches")).find(b => b.id === selected.id);
@@ -331,8 +338,8 @@ function BatchList({ batches, loading, onView }: {
       <div className="table-responsive"><table className="table table-hover align-middle mb-0">
         <thead><tr>
           <th>Batch</th><th>Microgreens</th><th>Location</th><th>Harvest Date</th><th>Planned</th>
-          {activeTab === "active" && <><th>Sold</th><th>Stage</th></>}
-          <th>Harvested</th><th>{activeTab === "closed" ? "Waste (gms)" : "Status"}</th><th className="text-end">Action</th>
+          <th>Harvested</th><th>Sold</th>
+          {activeTab === "active" && <th>Stage</th>}<th>{activeTab === "closed" ? "Waste (gms)" : "Status"}</th><th className="text-end">Action</th>
         </tr></thead>
         <tbody>
           {visibleBatches.map(batch => {
@@ -347,8 +354,8 @@ function BatchList({ batches, loading, onView }: {
                 <td>{batch.locationName || "—"}</td>
                 <td>{formatDate(batch.harvestDate || batch.startDate)}</td>
                 <td>{planned.toLocaleString()} gms</td>
-                <td>{sold.toLocaleString()} gms</td>
                 <td>{harvested.toLocaleString()} gms</td>
+                <td>{sold.toLocaleString()} gms</td>
                 <td><strong>{waste.toLocaleString()} gms</strong></td>
                 <td className="text-end"><button className="btn btn-sm btn-outline-primary" onClick={() => onView(batch)}>
                   <i className="bi bi-eye me-1" />View Details
@@ -360,7 +367,7 @@ function BatchList({ batches, loading, onView }: {
               const planned = Number(item.expectedYieldGrams ?? 0);
               const sold = Number(item.soldQuantityGrams ?? 0);
               const harvested = Number(item.actualYieldGrams ?? 0);
-              const soldPercent = planned > 0 ? Math.min(100, Math.round((sold / planned) * 100)) : 0;
+              const soldPercent = soldPercentOfHarvested(sold, harvested);
               const stage = batchStage(item);
               return <tr key={`${batch.id}:${item.id}`}>
                 {itemIndex === 0 && <td rowSpan={batch.items.length} className="align-middle"><strong>{batch.batchNumber}</strong></td>}
@@ -368,6 +375,7 @@ function BatchList({ batches, loading, onView }: {
                 {itemIndex === 0 && <td rowSpan={batch.items.length} className="align-middle">{batch.locationName || "—"}</td>}
                 {itemIndex === 0 && <td rowSpan={batch.items.length} className="align-middle">{formatDate(batch.harvestDate || batch.startDate)}</td>}
                 <td>{planned.toLocaleString()} gms</td>
+                <td>{harvested.toLocaleString()} gms</td>
                 <td style={{ minWidth: 125 }}>
                   <div className="fw-semibold">{sold.toLocaleString()} gms</div>
                   <div className="progress mt-1" style={{ height: 6 }} title={`${soldPercent}% sold`}>
@@ -376,7 +384,6 @@ function BatchList({ batches, loading, onView }: {
                   <div className="small text-muted mt-1">{soldPercent}%</div>
                 </td>
                 <td><span className={`badge text-bg-${batchStageClass(stage)}`}>{stage}</span></td>
-                <td>{harvested.toLocaleString()} gms</td>
                 {itemIndex === 0 && <td rowSpan={batch.items.length} className="align-middle"><span className={`badge text-bg-${batchStatusClass(batch.status)}`}>{statusLabel(batch.status)}</span></td>}
                 {itemIndex === 0 && <td rowSpan={batch.items.length} className="text-end align-middle"><button className="btn btn-sm btn-outline-primary" onClick={() => onView(batch)}>
                   <i className="bi bi-eye me-1" />View Status
@@ -589,13 +596,14 @@ function PhaseCell({
   </div>;
 }
 
-function BatchDetails({ batch, products, locations, uid, email, onBack, onSaved, onError }: {
+function BatchDetails({ batch, products, locations, uid, email, onBack, onDeleted, onSaved, onError }: {
   batch: GrowingBatch;
   products: Product[];
   locations: Location[];
   uid: string;
   email?: string;
   onBack: () => void;
+  onDeleted: () => Promise<void>;
   onSaved: () => Promise<void>;
   onError: (x: string) => void;
 }) {
@@ -608,6 +616,7 @@ function BatchDetails({ batch, products, locations, uid, email, onBack, onSaved,
   const [editNotes, setEditNotes] = useState(batch.notes || "");
   const [editTrays, setEditTrays] = useState<Record<string, number>>(() => Object.fromEntries(batch.items.map(i => [i.productId, Number(i.trayCount || 0)])));
   const [savingEdit, setSavingEdit] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const expected = batch.items.reduce((n, i) => n + i.expectedYieldGrams, 0);
   const actual = batch.items.reduce((n, i) => n + (i.actualYieldGrams ?? 0), 0);
@@ -706,6 +715,27 @@ function BatchDetails({ batch, products, locations, uid, email, onBack, onSaved,
     }
   }
 
+  async function deleteBatch() {
+    onError("");
+    const confirmed = await confirmAction({
+      title: `Delete batch ${batch.batchNumber}?`,
+      text: "This batch will be permanently deleted. This action cannot be undone.",
+      confirmText: "Yes, delete batch",
+    });
+    if (!confirmed) return;
+
+    setDeleting(true);
+    try {
+      await deleteNotStartedGrowingBatch(batch.id, uid, email);
+      await showSuccess(`Batch ${batch.batchNumber} deleted.`);
+      await onDeleted();
+    } catch (err) {
+      await showError(err, "Unable to delete growing batch.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return <>
     <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
       <div>
@@ -716,6 +746,9 @@ function BatchDetails({ batch, products, locations, uid, email, onBack, onSaved,
       <div className="d-flex gap-2">
         {batch.status === "not_started" && !batch.delivered && <button className="btn btn-outline-primary" onClick={openEdit} disabled={editing || savingEdit}>
           <i className="bi bi-pencil me-1" />Edit Batch
+        </button>}
+        {batch.status === "not_started" && !batch.delivered && <button className="btn btn-outline-danger" onClick={() => void deleteBatch()} disabled={editing || savingEdit || deleting}>
+          <i className="bi bi-trash me-1" />{deleting ? "Deleting..." : "Delete Batch"}
         </button>}
         <button className="btn btn-outline-secondary" onClick={onBack}><i className="bi bi-arrow-left me-1" />Back to batches</button>
       </div>

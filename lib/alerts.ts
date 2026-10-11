@@ -1,6 +1,7 @@
 "use client";
 
 import Swal from "sweetalert2";
+import { showToastNotification } from "./toast";
 
 export function errorMessage(error: unknown, fallback = "Something went wrong. Please try again.") {
   if (error instanceof Error && error.message.trim()) return error.message;
@@ -8,33 +9,18 @@ export function errorMessage(error: unknown, fallback = "Something went wrong. P
   return fallback;
 }
 
+// Informational and error messages are non-blocking toasts. They resolve immediately so
+// callers that `await` them continue without waiting for the toast to close.
 export async function showSuccess(title: string, text?: string) {
-  return Swal.fire({
-    icon: "success",
-    title,
-    text,
-    confirmButtonText: "OK",
-    confirmButtonColor: "#78b82a"
-  });
+  showToastNotification("success", { title, message: text });
 }
 
 export async function showError(error: unknown, fallback?: string) {
-  return Swal.fire({
-    icon: "error",
-    title: "Something went wrong",
-    text: errorMessage(error, fallback),
-    confirmButtonText: "OK"
-  });
+  showToastNotification("error", { title: "Something went wrong", message: errorMessage(error, fallback) });
 }
 
 export async function showWarning(title: string, text?: string) {
-  return Swal.fire({
-    icon: "warning",
-    title,
-    text,
-    confirmButtonText: "OK",
-    confirmButtonColor: "#78b82a"
-  });
+  showToastNotification("warning", { title, message: text });
 }
 
 export async function confirmAction(options: {
@@ -86,13 +72,5 @@ export async function promptText(options: {
 }
 
 export function showToast(message: string, icon: "success" | "error" | "warning" | "info" = "success") {
-  return Swal.fire({
-    toast: true,
-    position: "top-end",
-    icon,
-    title: message,
-    showConfirmButton: false,
-    timer: 2200,
-    timerProgressBar: true
-  });
+  showToastNotification(icon, { title: message });
 }

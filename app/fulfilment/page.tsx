@@ -4,8 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { listCollection } from "@/lib/firestore";
-import { cancelFulfilmentPacking, listManualFulfilments, packOrderFulfilment } from "@/lib/fulfilmentService";
+import { cancelFulfilmentPacking, listFulfilmentOrders, listManualFulfilments, packOrderFulfilment } from "@/lib/fulfilmentService";
 import { addNextSubscriptionDeliveryForFulfilment } from "@/lib/subscriptionDeliveryService";
+import { isPaidFulfilmentOrder, isPendingFulfilmentOrder, orderPackagingPlan } from "@/lib/fulfilmentEligibility";
 import { packagingDisplay } from "@/types/packaging";
 import type { Packaging } from "@/types/packaging";
 import type { SalesProduct } from "@/types/salesProduct";
@@ -34,20 +35,6 @@ function requiredGrams(item: OrderItem) {
 
 function packLabel(size: number) {
   return packagingDisplay(size);
-}
-
-function defaultPackaging(remaining: number, options: Packaging[]) {
-  const sizes = options.map(x => Math.round(numberValue(x.size))).filter(x => x > 0).sort((a, b) => b - a);
-  if (!sizes.length || remaining <= 0) return 0;
-  const exact = sizes.find(size => remaining % size === 0);
-  if (exact) return exact;
-  return sizes.find(size => size <= remaining) ?? sizes[sizes.length - 1];
-}
-
-function defaultBoxes(remaining: number, boxGrams: number) {
-  if (!remaining || !boxGrams) return 0;
-  if (remaining % boxGrams === 0) return remaining / boxGrams;
-  return Math.floor(remaining / boxGrams);
 }
 
 function componentPreview(salable: SalesProduct | undefined, boxGrams: number) {
@@ -91,7 +78,7 @@ export default function FulfilmentPage() {
     setLoading(true);
     try {
       const [orderData, salesData, packagingData, fulfilmentData, subscriptionDeliveryData, subscriptionData] = await Promise.all([
-        listCollection<Order>("orders", "createdAt"),
+        listFulfilmentOrders(),
         listCollection<SalesProduct>("salesProducts"),
         listCollection<Packaging>("packagingMaster", "size"),
         listManualFulfilments(),
@@ -121,6 +108,7 @@ export default function FulfilmentPage() {
     () => new Map(subscriptionDeliveries.map(delivery => [delivery.id, delivery])),
     [subscriptionDeliveries],
   );
+  const subscriptionById = useMemo(() => new Map(subscriptions.map(subscription => [subscription.id, subscription])), [subscriptions]);
 
   const activeSubscriptions = useMemo(() => subscriptions
     .filter(subscription => subscription.status === "active")
@@ -164,52 +152,43 @@ export default function FulfilmentPage() {
       ? subscriptionDeliveryById.get(record.subscriptionDeliveryId)
       : undefined;
     const order = record.orderId ? orderById.get(record.orderId) : undefined;
-    const status = delivery?.status || order?.status;
-    return status !== "delivered";
-  }), [history, orderById, subscriptionDeliveryById]);
+    if (!order || !isPaidFulfilmentOrder(order)) return false;
+    if (order.orderType !== "subscription" && !order.sourceSubscriptionId) return true;
+    const subscription = order.sourceSubscriptionId ? subscriptionById.get(order.sourceSubscriptionId) : undefined;
+    return subscription?.status === "active"
+      && subscription.requiresCustomerContact !== true
+      && subscription.availabilityDecision !== "contact"
+      && Boolean(delivery)
+      && delivery?.orderId === order.id
+      && delivery.subscriptionId === order.sourceSubscriptionId
+      && !["delivered", "failed", "cancelled"].includes(delivery?.status ?? "");
+  }), [history, orderById, subscriptionById, subscriptionDeliveryById]);
 
   const pendingOrders = useMemo(() => orders
-    .filter(order => order.paymentStatus === "paid")
-    .filter(order => !["packed", "delivered", "cancelled", "out_for_delivery"].includes(order.status))
-    .filter(order => order.packingStatus !== "packed")
-    .sort((a, b) => String(a.scheduledDeliveryDate || "").localeCompare(String(b.scheduledDeliveryDate || "")) || String(a.orderNumber || a.id).localeCompare(String(b.orderNumber || b.id))), [orders]);
+    .filter(order => isPendingFulfilmentOrder(order, subscriptionDeliveries, subscriptions))
+    .sort((a, b) => String(a.scheduledDeliveryDate || "").localeCompare(String(b.scheduledDeliveryDate || "")) || String(a.orderNumber || a.id).localeCompare(String(b.orderNumber || b.id))), [orders, subscriptionDeliveries, subscriptions]);
 
   const selectedOrder = orders.find(order => order.id === selectedOrderId);
 
   function openOrder(order: Order) {
+    const plan = orderPackagingPlan(order.items ?? []);
+    if (plan.errors.length) {
+      setError(plan.errors[0]);
+      return;
+    }
     setSelectedOrderId(order.id);
-    const next = (order.items ?? []).map((item, index) => {
-      const remaining = Math.max(0, requiredGrams(item) - numberValue(item.packedGrams));
-      const size = defaultPackaging(remaining, packaging);
-      return {
-        key: `${order.id}-${index}`,
-        orderItemIndex: index,
-        boxGrams: size,
-        boxesPacked: defaultBoxes(remaining, size),
-      };
-    });
+    const next = plan.lines.map(line => ({ key: `${order.id}-${line.orderItemIndex}`, ...line }));
     setDrafts(next);
     setMessage("");
     setError("");
   }
 
-  function updateDraft(index: number, patch: Partial<PackDraft>) {
-    setDrafts(current => current.map((draft, i) => {
-      if (i !== index) return draft;
-      const next = { ...draft, ...patch };
-      if (patch.boxGrams !== undefined && selectedOrder) {
-        const item = selectedOrder.items[next.orderItemIndex];
-        const remaining = Math.max(0, requiredGrams(item) - numberValue(item.packedGrams));
-        next.boxesPacked = defaultBoxes(remaining, next.boxGrams);
-      }
-      return next;
-    }));
-  }
-
   const draftValidation = useMemo(() => {
     if (!selectedOrder) return { errors: [], full: false };
-    const errors: string[] = [];
-    let full = true;
+    const plan = orderPackagingPlan(selectedOrder.items ?? []);
+    const errors = [...plan.errors];
+    let full = drafts.length === plan.lines.length;
+    if (!full) errors.push("The packing worksheet must include every remaining ordered box.");
     for (const draft of drafts) {
       const item = selectedOrder.items[draft.orderItemIndex];
       const salable = salableById.get(item?.salableProductId || item?.productId);
@@ -218,10 +197,9 @@ export default function FulfilmentPage() {
       const remaining = Math.max(0, required - packedBefore);
       const packedNow = draft.boxGrams * draft.boxesPacked;
       if (!item || !salable) errors.push(`Order item ${draft.orderItemIndex + 1} could not be resolved.`);
-      if (!draft.boxGrams || !packaging.some(p => Number(p.size) === draft.boxGrams)) errors.push(`${salable?.name || "Product"}: select an active Packaging Master size.`);
-      if (!Number.isInteger(draft.boxesPacked) || draft.boxesPacked < 1) errors.push(`${salable?.name || "Product"}: boxes must be at least 1.`);
+      if (!draft.boxGrams || !packaging.some(p => Number(p.size) === draft.boxGrams)) errors.push(`${salable?.name || "Product"}: the ordered packaging size is not active in Packaging Master.`);
       if (packedNow > remaining) errors.push(`${salable?.name || "Product"}: selected boxes exceed the remaining ${remaining.toLocaleString()} gms.`);
-      if (packedNow !== remaining) full = false;
+      if (packedNow !== remaining) errors.push(`${salable?.name || "Product"}: packaging and box quantity must match the remaining order.`);
     }
     return { errors, full };
   }, [drafts, packaging, salableById, selectedOrder]);
@@ -305,7 +283,7 @@ export default function FulfilmentPage() {
           <div className="card-header d-flex justify-content-between align-items-center">
             <div>
               <strong>Pending Packing Requirements</strong>
-              <div className="small text-muted">Only paid, not-yet-packed orders are shown. One-time and subscription orders use the same packing workflow.</div>
+              <div className="small text-muted">Only fully paid, confirmed orders are shown. Subscription orders also require an active subscription and a pending scheduled delivery.</div>
             </div>
             <span className="badge text-bg-primary">{pendingOrders.length} orders</span>
           </div>
@@ -325,7 +303,7 @@ export default function FulfilmentPage() {
                   })}</td>
                   <td className="text-end"><button className="btn btn-sm btn-success" onClick={() => openOrder(order)}><i className="bi bi-box-seam me-1" />Pack</button></td>
                 </tr>)}
-                {!pendingOrders.length && !loading && <tr><td colSpan={6} className="text-center text-muted py-5">No pending paid orders require packing.</td></tr>}
+                {!pendingOrders.length && !loading && <tr><td colSpan={6} className="text-center text-muted py-5">No fully paid, confirmed orders require packing.</td></tr>}
                 {loading && <tr><td colSpan={6} className="text-center py-5"><span className="spinner-border spinner-border-sm me-2" />Loading...</td></tr>}
               </tbody>
             </table>
@@ -338,7 +316,7 @@ export default function FulfilmentPage() {
             <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => { setSelectedOrderId(""); setDrafts([]); }}>Close</button>
           </div>
           <div className="card-body">
-            <div className="alert alert-info small">Select the actual box size from Packaging Master. Boxes are auto-calculated from the remaining requirement, but can be changed. A combo shows the Microgreen grams inside each selected box based on its Product percentages.</div>
+            <div className="alert alert-info small">Packaging size and ordered box quantity are fixed from the confirmed order. The remaining ordered boxes will be packed; they cannot be changed here. A combo shows the Microgreen grams inside each box based on its Product percentages.</div>
             <div className="table-responsive">
               <table className="table align-middle">
                 <thead><tr><th>Product</th><th>Requirement</th><th>Box Gms</th><th>Boxes</th><th>Packed</th><th>Microgreens / Box</th></tr></thead>
@@ -354,9 +332,9 @@ export default function FulfilmentPage() {
                     return <tr key={draft.key}>
                       <td><strong>{item.productName}</strong><div className="small text-muted">{salable?.type === "multiple" ? "Combo" : "Single"}</div></td>
                       <td>{required.toLocaleString()} gms<div className="small text-muted">{remaining.toLocaleString()} gms remaining</div></td>
-                      <td style={{ minWidth: 160 }}><select className="form-select" value={draft.boxGrams || ""} onChange={e => updateDraft(index, { boxGrams: Number(e.target.value) })}><option value="">Select packaging</option>{packaging.map(p => <option key={p.id} value={p.size}>{packLabel(Number(p.size))}</option>)}</select></td>
-                      <td style={{ width: 120 }}><input className="form-control" type="number" min="1" step="1" value={draft.boxesPacked || ""} onChange={e => updateDraft(index, { boxesPacked: Number(e.target.value) })}/></td>
-                      <td><strong>{packedNow.toLocaleString()} gms</strong>{packedNow !== remaining && <div className="small text-warning">{Math.max(0, remaining - packedNow).toLocaleString()} gms will remain</div>}</td>
+                      <td style={{ minWidth: 160 }}>{item.sellingOptionLabel || packLabel(draft.boxGrams)}</td>
+                      <td style={{ width: 160 }}><span>{draft.boxesPacked} remaining</span><div className="small text-muted">{item.quantity} ordered</div></td>
+                      <td><strong>{packedNow.toLocaleString()} gms</strong></td>
                       <td><div className="small">{preview.map((row, i) => <span key={`${row.name}-${i}`} className="badge text-bg-light border me-1 mb-1 fw-normal">{row.name}: {row.grams}g</span>)}</div></td>
                     </tr>;
                   })}
@@ -364,11 +342,10 @@ export default function FulfilmentPage() {
               </table>
             </div>
             {draftValidation.errors.map((text, index) => <div key={`${text}-${index}`} className="alert alert-danger py-2 small mb-2">{text}</div>)}
-            {!draftValidation.errors.length && !draftValidation.full && <div className="alert alert-warning py-2 small">This is a partial packing. The order will remain in Pending Packing until the remaining grams are packed.</div>}
           </div>
           <div className="card-footer d-flex justify-content-end gap-2">
             <button type="button" className="btn btn-secondary" onClick={() => { setSelectedOrderId(""); setDrafts([]); }}>Cancel</button>
-            <button type="button" className="btn btn-success" disabled={working || loading || !!draftValidation.errors.length} onClick={() => void pack()}>{working ? "Packing..." : draftValidation.full ? "Complete Packing" : "Pack Selected Quantity"}</button>
+            <button type="button" className="btn btn-success" disabled={working || loading || !!draftValidation.errors.length || !draftValidation.full} onClick={() => void pack()}>{working ? "Packing..." : "Pack Ordered Boxes"}</button>
           </div>
         </div>}
 

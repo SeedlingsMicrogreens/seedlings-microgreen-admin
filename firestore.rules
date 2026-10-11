@@ -35,6 +35,8 @@ service cloud.firestore {
 
     match /products/{id} { allow read, write: if admin(); }
     match /salesProducts/{id} { allow read, write: if admin(); }
+    match /offers/{id} { allow read, write: if admin(); }
+    match /offerTypeLocks/{type} { allow read, write: if admin(); }
     match /inventoryAdjustments/{id} { allow read, write: if admin(); }
     match /growingBatches/{id} { allow read, write: if admin(); }
     match /locations/{id} { allow read, write: if admin(); }
