@@ -40,3 +40,16 @@ test("Subscription Masters form is rendered inline without the modal workflow", 
   assert.match(page, /tab==="list"\?[\s\S]*?<PlanForm/);
   assert.doesNotMatch(page, /className="modal|function PlanModal|function Modal/);
 });
+
+test("Subscription Plans listing has exactly the required columns in order", () => {
+  assert.match(page, /<thead><tr><th>Product<\/th><th>Plan<\/th><th>Frequency<\/th><th>Deliveries<\/th><th>Skips Allowed<\/th><th>Selling Options<\/th><th>Status<\/th><th className="text-end">Actions<\/th><\/tr><\/thead>/);
+  assert.match(page, /!plans\.length&&!loading&&<tr><td colSpan=\{8\}/);
+});
+
+test("Selling Options list each weight and formatted plan price without maximum information", () => {
+  const listing = page.slice(page.indexOf('<div className="table-responsive"><table'), page.indexOf("</table>"));
+  assert.match(listing, /sellingOptionPrice\(Number\(o\.planPrice \|\| 0\)\)/);
+  assert.match(listing, /} - \$\{sellingOptionPrice/);
+  assert.match(page, /toLocaleString\("en-IN",\{minimumFractionDigits:2,maximumFractionDigits:2\}\)/);
+  assert.doesNotMatch(listing, /maximum|Maximum Plan Price|maximumQuantity/i);
+});

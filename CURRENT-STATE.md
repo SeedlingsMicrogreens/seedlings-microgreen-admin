@@ -209,6 +209,20 @@ Current selling-option behavior:
 - If the selected Product has no active selling options, the entire Selling Options block is hidden.
 - Plan Price per 100gms is read-only and reflects the current Product 100g Selling Price.
 
+### Subscription Masters listing
+
+- The `/subscription-masters` listing displays exactly these columns in
+  order: Product, Plan, Frequency, Deliveries, Skips Allowed, Selling Options,
+  Status, Actions.
+- Each configured Selling Option shows its weight and price using the
+  existing currency formatting (for example, `100g - ₹500.00`).
+- Maximum quantity and all maximum-related information are excluded from the
+  listing. Plan forms, selling-option configuration and stored data, delivery
+  counts, frequency rules, pricing calculations, status behavior, actions, and
+  other pages remain unchanged.
+- See `SUBSCRIPTION-MASTERS-LISTING-REQUIREMENTS.md` for the full listing
+  requirements.
+
 Customer subscriptions are separate from plan masters and store customer-facing snapshots such as Product, selling option, weight, unit price, frequency and delivery schedule.
 
 ### Admin subscription completion — Phase 1 analysis

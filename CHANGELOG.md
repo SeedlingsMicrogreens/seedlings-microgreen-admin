@@ -1,3 +1,22 @@
+## Subscription Masters — Listing Columns
+
+- Updated the Subscription Plans listing to show Product, Plan, Frequency,
+  Deliveries, Skips Allowed, Selling Options, Status, and Actions in that
+  order; removed the standalone Plan Price and Maximum Plan Price columns.
+- Selling Options show each weight and plan price in the existing rupee style,
+  with thousands separators. Maximum-related details are no longer shown in
+  the listing; the create/edit form and existing plan behavior are unchanged.
+- Added focused listing regression tests; `npx tsx --test tests/subscription-master-tabs.test.ts tests/subscription-plan-pricing.test.ts`, `npm run typecheck`, and `git diff --check` passed.
+
+## Subscription Masters — Listing Columns (Documentation Phase)
+
+- Documented the exact Subscription Plans listing column order and the required
+  weight-and-price display for configured Selling Options.
+- Recorded the exclusions and preserved behavior for the create/edit form,
+  plan data, counts, pricing, status, actions, and other pages.
+- **Documentation only:** application code was not changed; implementation is
+  pending explicit approval.
+
 ## Admin Subscription Completion — Phase 1 Requirements Draft
 
 - Narrowed the proposed change to Admin delivery completion using the
