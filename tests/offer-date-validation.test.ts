@@ -71,6 +71,16 @@ test("allows non-overlapping ranges and overlapping ranges of different types", 
     startDate: "2026-10-15",
     endDate: "2026-10-25",
   }, [existing]));
+  assert.doesNotThrow(() => assertNoOfferDateOverlap({
+    type: "subscription",
+    startDate: "2026-10-15",
+    endDate: "2026-10-25",
+  }, [existing]));
+  assert.throws(() => assertNoOfferDateOverlap({
+    type: "subscription",
+    startDate: "2026-10-15",
+    endDate: "2026-10-25",
+  }, [offer("existing-subscription", "subscription", "2026-10-10", "2026-10-20")]), /already exists/);
 });
 
 test("updates exclude themselves but detect another overlapping same-type offer", () => {

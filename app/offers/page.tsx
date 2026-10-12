@@ -11,11 +11,21 @@ import {
   validateOfferDateRange,
 } from "@/lib/offerDateValidation";
 import { listCollection } from "@/lib/firestore";
+import {
+  buildSubscriptionOfferFromForm,
+  previewSubscriptionOffer,
+} from "@/lib/subscriptionOffer";
 import type { Product } from "@/types/catalog";
 import type { Packaging } from "@/types/packaging";
 import { packagingDisplay } from "@/types/packaging";
 import type { Geolocation } from "@/types/geolocation";
 import type { Offer, OfferDiscountType, OfferLocationType, OfferType } from "@/types/offer";
+import {
+  SUBSCRIPTION_FREQUENCIES,
+  subscriptionFrequencyLabel,
+  type SubscriptionFrequency,
+  type SubscriptionPlan,
+} from "@/types/subscriptionPlan";
 
 const emptyForm = {
   name: "",
@@ -31,6 +41,13 @@ const emptyForm = {
   buyPackaging: "",
   getProductId: "",
   getPackaging: "",
+  subscriptionFrequencies: [] as SubscriptionFrequency[],
+  extraDeliveryInputs: {
+    monthly: "",
+    quarterly: "",
+    half_yearly: "",
+    yearly: "",
+  } as Record<SubscriptionFrequency, string>,
 };
 
 type OfferForm = typeof emptyForm;
@@ -41,6 +58,13 @@ function formatLocation(item: Geolocation) {
 }
 
 function formatDiscount(item: OfferRecord) {
+  if (item.type === "subscription") {
+    const configuration = item.subscriptionOffer;
+    if (!configuration) return "—";
+    return configuration.frequencies
+      .map(frequency => `${subscriptionFrequencyLabel(frequency)}: +${configuration.extraDeliveriesByFrequency[frequency]}`)
+      .join(", ");
+  }
   if (item.type === "quantity") {
     const rule = item.quantityRule;
     return rule ? `Buy ${rule.buyProductName} ${packagingDisplay(Number(rule.buyPackaging))} → Get ${rule.getProductName} ${packagingDisplay(Number(rule.getPackaging))}` : "—";
@@ -53,6 +77,8 @@ export default function OffersPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [packaging, setPackaging] = useState<Packaging[]>([]);
   const [pincodes, setPincodes] = useState<Geolocation[]>([]);
+  const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlan[]>([]);
+  const [subscriptionPlansLoadError, setSubscriptionPlansLoadError] = useState("");
   const [form, setForm] = useState<OfferForm>({ ...emptyForm });
   const [editing, setEditing] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -75,6 +101,15 @@ export default function OffersPage() {
       setPackaging(packagingRows.filter(p => p.active !== false).sort((a, b) => Number(a.size) - Number(b.size)));
       setPincodes(pincodeRows.filter(p => p.active !== false));
       setError("");
+      try {
+        setSubscriptionPlans(await listCollection<SubscriptionPlan>("subscriptionPlans"));
+        setSubscriptionPlansLoadError("");
+      } catch (planError) {
+        setSubscriptionPlans([]);
+        setSubscriptionPlansLoadError(
+          planError instanceof Error ? planError.message : "Unable to load subscription plans for preview.",
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load Offers Master.");
     } finally {
@@ -89,7 +124,8 @@ export default function OffersPage() {
     return offers.filter(item =>
       !q ||
       item.name.toLowerCase().includes(q) ||
-      item.type.toLowerCase().includes(q)
+      item.type.toLowerCase().includes(q) ||
+      formatDiscount(item).toLowerCase().includes(q)
     );
   }, [offers, search]);
 
@@ -117,6 +153,17 @@ export default function OffersPage() {
       buyPackaging: rule ? String(rule.buyPackaging) : "",
       getProductId: rule?.getProductId ?? "",
       getPackaging: rule ? String(rule.getPackaging) : "",
+      subscriptionFrequencies: item.subscriptionOffer?.frequencies ?? [],
+      extraDeliveryInputs: {
+        monthly: item.subscriptionOffer?.extraDeliveriesByFrequency.monthly === undefined
+          ? "" : String(item.subscriptionOffer.extraDeliveriesByFrequency.monthly),
+        quarterly: item.subscriptionOffer?.extraDeliveriesByFrequency.quarterly === undefined
+          ? "" : String(item.subscriptionOffer.extraDeliveriesByFrequency.quarterly),
+        half_yearly: item.subscriptionOffer?.extraDeliveriesByFrequency.half_yearly === undefined
+          ? "" : String(item.subscriptionOffer.extraDeliveriesByFrequency.half_yearly),
+        yearly: item.subscriptionOffer?.extraDeliveriesByFrequency.yearly === undefined
+          ? "" : String(item.subscriptionOffer.extraDeliveriesByFrequency.yearly),
+      },
     });
     setShowForm(true);
     setError("");
@@ -192,6 +239,19 @@ export default function OffersPage() {
       };
     }
 
+    if (form.type === "subscription") {
+      try {
+        data.subscriptionOffer = buildSubscriptionOfferFromForm(
+          form.subscriptionFrequencies,
+          form.extraDeliveryInputs,
+        );
+      } catch (validationError) {
+        setError(validationError instanceof Error ? validationError.message : "Invalid subscription offer configuration.");
+        void showError(validationError, "Invalid subscription offer configuration.");
+        return;
+      }
+    }
+
     setSaving(true);
     try {
       if (editing) {
@@ -226,8 +286,31 @@ export default function OffersPage() {
     }
   }
 
-  const typeLabel = (type: OfferType) =>
-    type === "price" ? "Price" : type === "deliveryCharge" ? "Delivery Charge" : "Quantity";
+  const typeLabel = (type: OfferType) => {
+    if (type === "price") return "Price";
+    if (type === "deliveryCharge") return "Delivery Charge";
+    if (type === "quantity") return "Quantity";
+    return "Subscription";
+  };
+
+  let subscriptionPreviewRows: ReturnType<typeof previewSubscriptionOffer> = [];
+  let subscriptionPreviewReady = false;
+  let subscriptionPreviewError = "";
+  if (form.type === "subscription" && form.subscriptionFrequencies.length > 0) {
+    try {
+      const configuration = buildSubscriptionOfferFromForm(
+        form.subscriptionFrequencies,
+        form.extraDeliveryInputs,
+      );
+      subscriptionPreviewRows = previewSubscriptionOffer(subscriptionPlans, configuration);
+      subscriptionPreviewReady = true;
+    } catch (previewError) {
+      subscriptionPreviewReady = false;
+      subscriptionPreviewError = previewError instanceof Error
+        ? previewError.message
+        : "Unable to calculate subscription delivery preview.";
+    }
+  }
 
   return (
     <AdminPage>
@@ -235,7 +318,7 @@ export default function OffersPage() {
         <div className="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-3">
           <div>
             <h1 className="h3 seedlings-brand mb-1">Offers Master</h1>
-            <p className="text-muted mb-0">Manage price, delivery charge and quantity offers.</p>
+            <p className="text-muted mb-0">Manage price, delivery charge, quantity and subscription offers.</p>
           </div>
           <div className="d-flex gap-2">
             <button className="btn btn-outline-secondary" onClick={() => void load()} disabled={loading} title="Refresh"><i className="bi bi-arrow-clockwise" /></button>
@@ -285,6 +368,7 @@ export default function OffersPage() {
                       <option value="price">Price</option>
                       <option value="deliveryCharge">Delivery Charge</option>
                       <option value="quantity">Quantity</option>
+                      <option value="subscription">Subscription</option>
                     </select>
                   </div>
                   <div className="col-md-4">
@@ -349,6 +433,102 @@ export default function OffersPage() {
                                 {packaging.map(p => <option key={p.id} value={p.size}>{packagingDisplay(Number(p.size))}</option>)}
                               </select>
                             </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {form.type === "subscription" && (
+                    <div className="col-12">
+                      <div className="card seedlings-offer-section">
+                        <div className="card-header">
+                          <strong>Subscription Offer</strong>
+                          <div className="small text-muted">Configure extra deliveries for each applicable subscription frequency.</div>
+                        </div>
+                        <div className="card-body">
+                          <div className="row g-3">
+                            {SUBSCRIPTION_FREQUENCIES.map(frequency => {
+                              const selected = form.subscriptionFrequencies.includes(frequency);
+                              return (
+                                <div className="col-md-3" key={frequency}>
+                                  <div className="form-check mb-2">
+                                    <input
+                                      className="form-check-input"
+                                      type="checkbox"
+                                      id={`offer-frequency-${frequency}`}
+                                      checked={selected}
+                                      onChange={event => {
+                                        const frequencies = event.target.checked
+                                          ? [...form.subscriptionFrequencies, frequency]
+                                          : form.subscriptionFrequencies.filter(value => value !== frequency);
+                                        setForm({
+                                          ...form,
+                                          subscriptionFrequencies: frequencies,
+                                          extraDeliveryInputs: {
+                                            ...form.extraDeliveryInputs,
+                                            [frequency]: event.target.checked ? form.extraDeliveryInputs[frequency] : "",
+                                          },
+                                        });
+                                      }}
+                                    />
+                                    <label className="form-check-label" htmlFor={`offer-frequency-${frequency}`}>
+                                      {subscriptionFrequencyLabel(frequency)}
+                                    </label>
+                                  </div>
+                                  {selected && (
+                                    <>
+                                      <label className="form-label" htmlFor={`offer-extra-${frequency}`}>Extra Deliveries *</label>
+                                      <input
+                                        className="form-control"
+                                        id={`offer-extra-${frequency}`}
+                                        type="number"
+                                        min="1"
+                                        step="1"
+                                        value={form.extraDeliveryInputs[frequency]}
+                                        onChange={event => setForm({
+                                          ...form,
+                                          extraDeliveryInputs: {
+                                            ...form.extraDeliveryInputs,
+                                            [frequency]: event.target.value,
+                                          },
+                                        })}
+                                        required
+                                      />
+                                    </>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="mt-3">
+                            <strong>Calculated Delivery Preview</strong>
+                            {!form.subscriptionFrequencies.length && (
+                              <div className="small text-muted">Select one or more frequencies to preview deliveries.</div>
+                            )}
+                            {form.subscriptionFrequencies.length > 0 && !subscriptionPreviewReady && (
+                              <div className="small text-danger">
+                                {subscriptionPreviewError || "Enter valid extra-delivery values to preview totals."}
+                              </div>
+                            )}
+                            {form.subscriptionFrequencies.length > 0 && subscriptionPlansLoadError && (
+                              <div className="small text-danger">Unable to load subscription plans for preview: {subscriptionPlansLoadError}</div>
+                            )}
+                            {subscriptionPreviewReady && form.subscriptionFrequencies.map(frequency => {
+                              const rows = subscriptionPreviewRows.filter(row => row.frequency === frequency);
+                              return (
+                                <div className="mt-2" key={frequency}>
+                                  <div className="small fw-semibold">{subscriptionFrequencyLabel(frequency)}</div>
+                                  {subscriptionPlansLoadError ? null : rows.length ? rows.map(row => (
+                                    <div className="small text-muted" key={row.planId}>
+                                      {row.planName}: {row.regularDeliveries} regular + {row.extraDeliveries} extra = {row.totalDeliveries} deliveries
+                                    </div>
+                                  )) : (
+                                    <div className="small text-muted">No active subscription plans are configured for this frequency.</div>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       </div>

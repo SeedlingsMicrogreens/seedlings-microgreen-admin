@@ -1,4 +1,6 @@
-export type OfferType = "price" | "deliveryCharge" | "quantity";
+import type { SubscriptionFrequency } from "./subscriptionPlan";
+
+export type OfferType = "price" | "deliveryCharge" | "quantity" | "subscription";
 export type OfferLocationType = "all" | "pincode";
 export type OfferDiscountType = "percentage" | "flat";
 
@@ -9,6 +11,11 @@ export type OfferQuantityRule = {
   getProductId: string;
   getProductName: string;
   getPackaging: number;
+};
+
+export type SubscriptionOfferConfiguration = {
+  frequencies: SubscriptionFrequency[];
+  extraDeliveriesByFrequency: Partial<Record<SubscriptionFrequency, number>>;
 };
 
 export type Offer = {
@@ -26,6 +33,7 @@ export type Offer = {
   discountValue?: number;
 
   quantityRule?: OfferQuantityRule;
+  subscriptionOffer?: SubscriptionOfferConfiguration;
 
   createdAt?: unknown;
   updatedAt?: unknown;

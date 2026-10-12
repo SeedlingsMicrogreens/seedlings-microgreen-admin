@@ -159,6 +159,14 @@ Example: 100g packaging × 10 boxes → `weightGrams = 1000`; component demand i
 - Offers use the existing `type`, `startDate`, and `endDate` fields. Date ranges are inclusive; ranges of the same type may not overlap, while different types may overlap.
 - The Offers form reports date-ordering and overlap errors through the centralized SweetAlert2 error toast. The service revalidates writes against current Firestore offers while serializing saves by offer type.
 
+### Offers Subscription type
+
+- The approved specification is `OFFER-SUBSCRIPTION-REQUIREMENTS.md`. Subscription is the fourth Offers Master type alongside Price, Delivery Charge, and Quantity.
+- Subscription offers store administrator-configured extra deliveries separately for selected Monthly, Quarterly, Half-Yearly, and Yearly frequencies in the optional `subscriptionOffer` field. No legacy offer migration is required.
+- The Offers form previews total deliveries from each matching active Subscription Plan's editable `deliveriesPerTerm` plus the configured bonus. The separate hardcoded helper in `types/subscription.ts` is not used; subscription behavior is unchanged.
+- Offer services validate the frequency/count configuration and clear subscription-only data when an offer changes to another type. The listing displays and searches the frequency/bonus summary.
+- Scope is Admin Offers Master only. Applying offers to customer subscriptions, customer pricing, website/cart/checkout, and delivery generation are excluded.
+
 ## 5. Inventory and fulfilment
 
 Inventory is canonical in grams.

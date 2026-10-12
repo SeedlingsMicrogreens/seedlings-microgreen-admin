@@ -1,3 +1,10 @@
+## Offers — Subscription Type
+
+- Added Subscription as a fourth Offers type with configurable extra deliveries by Monthly, Quarterly, Half-Yearly, and Yearly frequency, edit restoration, frequency-wise listing/search summary, and service validation.
+- The calculated preview uses each matching active Subscription Plan's editable `deliveriesPerTerm` plus the configured bonus; it does not hardcode regular counts or persist preview totals.
+- Existing Price, Delivery Charge, and Quantity behavior and offer date-overlap rules are preserved. Changing an offer to another type clears its subscription-only field.
+- Scope is limited to Admin Offers Master. Customer-subscription application, pricing, website/cart/checkout, and delivery-generation behavior are unchanged.
+
 ## Subscription Masters — Inline Add/Edit Form Tabs
 - Replace the Add/Edit modal with a responsive inline form on its own page tab; retain the subscription plans list and its existing actions on the other tab.
 - Add/Edit navigation initializes the same form and pricing behavior. Successful saves refresh and return to the list; errors keep the form and entered values visible.

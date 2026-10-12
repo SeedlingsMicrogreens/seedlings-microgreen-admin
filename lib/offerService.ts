@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteField,
   doc,
   getDocs,
   runTransaction,
@@ -9,10 +10,17 @@ import {
 import { db } from "./firebase";
 import { auditEvent, deleteRecord } from "./firestore";
 import { assertNoOfferDateOverlap, validateOfferDateRange } from "./offerDateValidation";
+import { validateSubscriptionOffer } from "./subscriptionOffer";
 import type { Offer, OfferType } from "@/types/offer";
 
 export async function createOffer(input: Omit<Offer, "id" | "createdAt" | "updatedAt">) {
   validateOffer(input);
+  const data: Omit<Offer, "id" | "createdAt" | "updatedAt"> = { ...input };
+  if (input.type === "subscription") {
+    data.subscriptionOffer = validateSubscriptionOffer(input.subscriptionOffer);
+  } else {
+    delete data.subscriptionOffer;
+  }
   const range = validateOfferDateRange(input.startDate, input.endDate);
   const offerRef = doc(collection(db, "offers"));
 
@@ -24,14 +32,14 @@ export async function createOffer(input: Omit<Offer, "id" | "createdAt" | "updat
       id: snapshot.id,
       ...(snapshot.data() as Omit<Offer, "id">),
     })) as Offer[];
-    assertNoOfferDateOverlap({ ...input, ...range }, records);
+    assertNoOfferDateOverlap({ ...data, ...range }, records);
 
     transaction.set(lockRef, {
       revision: Number(lockSnapshot.data()?.revision ?? 0) + 1,
       updatedAt: serverTimestamp(),
     });
     transaction.set(offerRef, {
-      ...input,
+      ...data,
       ...range,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -75,11 +83,17 @@ export async function updateOffer(id: string, input: Partial<Offer>) {
         updatedAt: serverTimestamp(),
       });
     });
-    transaction.update(offerRef, {
+    const updateData: Record<string, unknown> = {
       ...input,
       ...range,
       updatedAt: serverTimestamp(),
-    });
+    };
+    if (updated.type === "subscription") {
+      updateData.subscriptionOffer = validateSubscriptionOffer(updated.subscriptionOffer);
+    } else {
+      updateData.subscriptionOffer = deleteField();
+    }
+    transaction.update(offerRef, updateData);
   });
 
   await auditEvent("update", "offers", id, `Updated offer ${offerName}`);
@@ -110,9 +124,13 @@ function validateOffer(input: Partial<Offer>, partial = false) {
   }
 
   if (!partial || input.type !== undefined) {
-    if (input.type !== "price" && input.type !== "deliveryCharge" && input.type !== "quantity") {
+    if (input.type !== "price" && input.type !== "deliveryCharge" && input.type !== "quantity" && input.type !== "subscription") {
       throw new Error("Offer type is required.");
     }
+  }
+
+  if (input.type === "subscription" && (!partial || input.subscriptionOffer !== undefined)) {
+    validateSubscriptionOffer(input.subscriptionOffer);
   }
 
   if (input.type === "price" || input.type === "deliveryCharge") {
