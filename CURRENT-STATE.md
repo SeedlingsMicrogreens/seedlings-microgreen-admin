@@ -211,6 +211,37 @@ Current selling-option behavior:
 
 Customer subscriptions are separate from plan masters and store customer-facing snapshots such as Product, selling option, weight, unit price, frequency and delivery schedule.
 
+### Admin subscription completion — Phase 1 analysis
+
+- Subscription Masters stores an editable plan-level `deliveriesPerTerm` in
+  `subscriptionPlans`. Admin customer subscriptions separately save
+  `totalDeliveries`; the completion fix is scoped to this purchased entitlement
+  and does not change creation, plan selection, or the existing frequency
+  mapping. Admin subscription delivery orders currently save a blank
+  `subscriptionPlanId`.
+- Admin packing marks occurrences `packed`; handover creates/updates them as
+  `out_for_delivery`; the Delivery Status **Mark as Delivered** action updates
+  the assignment, order, fulfilments, subscription-delivery record, and parent
+  subscription in a transaction.
+- Current `completedDeliveries` uses the delivered occurrence's sequence number
+  as a high-water mark, not a count of distinct currently delivered records.
+  This can overstate progress when earlier occurrences are incomplete. The
+  fulfilment delivery-generation path separately counts delivered documents to
+  determine progress and the next number. The delivery service can also
+  overwrite a previously delivered occurrence with a later status, while the
+  parent progress remains unchanged; its Delivered UI gate is not revalidated
+  as a service transition, and a missing subscription-delivery record does not
+  currently prevent the order/assignment/fulfilment updates.
+- The proposed completion-only correction and legacy/Website compatibility
+  risks are documented in
+  [SUBSCRIPTION-DELIVERY-LIFECYCLE-REQUIREMENTS.md](./SUBSCRIPTION-DELIVERY-LIFECYCLE-REQUIREMENTS.md).
+- The Website checkout snapshot and shared-lifecycle behavior are supplied as
+  an integration contract for this task but are not verified against Website
+  source in this repository. Confirm the Website's document paths and
+  completion writer before implementing compatible shared-document changes.
+- **No implementation has been made.** The requirements document is a draft
+  awaiting approval; application changes must not begin until approval.
+
 ## 8. Delete/reference rules currently established
 
 ### Microgreen — `/products`

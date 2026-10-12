@@ -1,3 +1,16 @@
+## Admin Subscription Completion — Phase 1 Requirements Draft
+
+- Narrowed the proposed change to Admin delivery completion using the
+  subscription's already-saved `totalDeliveries`; subscription creation,
+  Subscription Masters, and the frequency mapping are explicitly out of scope.
+- Documented current transaction paths and the high-water-mark progress,
+  duplicate-completion, missing-record, and later-status-overwrite risks.
+- Specified counting each valid subscription-delivery occurrence once on its
+  first Delivered transition, comparing progress with the saved entitlement,
+  and preserving one-time order behavior.
+- **Documentation only:** no application code, tests, rules, data, or Website
+  files were changed. Implementation is blocked pending explicit approval.
+
 ## Offers — Subscription Type
 
 - Added Subscription as a fourth Offers type with configurable extra deliveries by Monthly, Quarterly, Half-Yearly, and Yearly frequency, edit restoration, frequency-wise listing/search summary, and service validation.
