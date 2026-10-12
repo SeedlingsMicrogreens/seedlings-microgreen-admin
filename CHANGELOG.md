@@ -1,3 +1,44 @@
+## Subscription Masters — Inline Add/Edit Form Tabs
+- Replace the Add/Edit modal with a responsive inline form on its own page tab; retain the subscription plans list and its existing actions on the other tab.
+- Add/Edit navigation initializes the same form and pricing behavior. Successful saves refresh and return to the list; errors keep the form and entered values visible.
+- Confirm before abandoning unsaved form changes when cancelling or switching back to the list.
+
+## Subscription Masters — Latest 100g Plan Price and Maximum
+- Make Plan Price (per 100gms) a read-only reflection of the Product's current valid 100g Selling Option.
+- Persist the plan-level `maximumPlanPrice` as delivery count × current 100g price and packaging-specific maxima using each matching selling-option price. The maximum is informational; discounted subscription prices remain valid.
+- Recalculate derived values using current Product data on create/update without changing existing actual per-option `planPrice` values.
+
+## Subscription Masters — Maximum Plan Price and Read-Only 100g Price
+- Use the current valid Product 100g Selling Price as the read-only Plan Price per 100gms, and calculate/persist the plan-level Maximum Plan Price as deliveries × that 100g price.
+- Persist a packaging-specific Maximum Plan Price on each subscription selling option using its matching Product Selling Price. This value is informational; discounted actual `planPrice` values remain valid and unchanged.
+- Recalculate derived maximum prices from current Product data on Add/Update and display latest 100g values when loading Subscription Masters.
+
+## Subscription Masters — Maximum Plan Price and 100g Price
+- Replace calculated reference/minimum term fields with informational `maximumPlanPrice`; discounting the actual selling-option `planPrice` below it is allowed.
+- Derive the read-only base Plan Price per 100gms from the Product's current valid 100g Selling Option and calculate the plan-level maximum as deliveries per term × that base price.
+- Persist per-option maximums using each option's own Product Selling Price. Services recalculate derived values and canonicalize legacy field names on successful create/update without changing existing actual subscription prices.
+
+## Subscription Masters — Fallback Plan Price
+- For a selling option without an existing Subscription Plan Price, calculate the default term price as Deliveries per Term × that same Product Selling Option's selling price, rounded to two decimals.
+- Preserve saved/manual plan prices and fill only missing values. Validate the latest Product option prices and plan delivery count in the service before Firestore writes.
+
+## Subscription Masters — Minimum Plan Price
+- Persist a `minimumPlanPrice` for each subscription selling option, recalculated from the latest deliveries-per-term and the matching Product Selling Price.
+- Reject any plan price below its calculated minimum in both the form and service. Fill missing plan prices with the minimum; preserve legacy/manual prices and backfill the minimum only on a successful save.
+
+## Subscription Masters — Reference Plan Price Naming
+- Rename the calculated term-price field to `referencePlanPrice`; it is informational and does not constrain `planPrice`, so discounted subscription prices remain valid.
+- Recompute reference prices from each matching Product Selling Option and the current delivery count. Read legacy `minimumPlanPrice` values compatibly and write only the canonical `referencePlanPrice` field on successful saves.
+
+## Rack Locations — Mandatory Field Validation Toasts
+- Report missing location name, threshold value, threshold unit, and invalid/non-positive thresholds with the centralized top-right SweetAlert2 error toast.
+- Stop invalid create/update requests before Firestore writes and surface save-layer errors through the same toast utility.
+
+## Rack Locations — Restore Threshold Fields
+- Restore threshold value and `gms`/`kg` unit controls to Rack Location create/edit forms and the listing, preserving the exact entered value and unit while storing a gram-normalized `thresholdGrams`.
+- Require a finite threshold greater than zero before saving. Legacy locations without thresholds remain unset until an administrator explicitly supplies one.
+- Investigation found no threshold fields in the current UI, Location type, or persistence payload, no remaining `locations.thresholdGrams` consumers, and no recoverable earlier implementation in available Git history/branches.
+
 ## Fulfilment — Confirmed Paid Orders and Read-Only Packaging
 - Restrict the Fulfilment order query and operational lists to fully paid, eligible order lifecycles; subscription packing also checks the active parent subscription and the specific pending delivery.
 - Make order packaging size and remaining box counts read-only and validate them against the latest order snapshot in the packing transaction. Existing inventory allocation and handover deductions remain unchanged.

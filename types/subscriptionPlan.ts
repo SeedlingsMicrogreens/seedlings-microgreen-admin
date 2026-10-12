@@ -3,7 +3,8 @@ export type SubscriptionFrequency = "monthly" | "quarterly" | "half_yearly" | "y
 export type SubscriptionPlanSellingOption = {
   id: string;
   weightGrams: number;
-  planPrice: number;
+  planPrice?: number;
+  maximumPlanPrice?: number;
 };
 
 export type SubscriptionPlan = {
@@ -15,8 +16,10 @@ export type SubscriptionPlan = {
   frequency: SubscriptionFrequency;
   deliveriesPerTerm: number;
   skipsAllowed: number;
-  /** Legacy/base subscription price, always stored per 100gms. */
+  /** Current Product Selling Price for the 100gms option, not the discounted plan price. */
   price: number;
+  /** Informational regular price for the full term at the current 100gms Selling Price. */
+  maximumPlanPrice?: number;
   /** Subscription pricing configured only for selling options available on the selected salable product. */
   sellingOptions?: SubscriptionPlanSellingOption[];
   deliveryChargeMode: "included" | "per_delivery" | "free";

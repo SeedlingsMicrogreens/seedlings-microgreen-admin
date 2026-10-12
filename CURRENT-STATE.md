@@ -185,6 +185,8 @@ Orders represent customer purchases and their operational lifecycle.
 
 A Subscription Plan references a salable Product.
 
+Subscription Masters uses page-level **Subscription Plans** and **Add/Edit Subscription Plan** tabs. Add and Edit render the existing plan form inline (not in a modal); successful saves return to the list and refresh it. Cancel or navigating back to the listing from a dirty form requires confirmation through the existing SweetAlert2 confirmation utility.
+
 Current selling-option behavior:
 - Product is selectable during Create.
 - Product is read-only during Update.
@@ -193,10 +195,11 @@ Current selling-option behavior:
 - Product Selling Price is read-only.
 - **Subscription Plan Price is editable during both Create and Update.**
 - Each selling option can have its own plan price.
+- The plan-level `price` is the current Product 100g Selling Price, read-only in Subscription Masters. Plan-level `maximumPlanPrice` is `deliveriesPerTerm × price`. Each Subscription Plan selling option stores its actual `planPrice` and its own `maximumPlanPrice = deliveriesPerTerm × the matching Product selling option's price`, rounded to two currency decimals. Maximum prices are informational; discounted `planPrice` values below them are valid and are never rewritten because Product prices change. Missing actual selling-option `planPrice` values default to their packaging-specific maximum. Require a valid 100g Product Selling Option; never substitute MRP or another packaging size. Legacy nested `minimumPlanPrice` / `referencePlanPrice` values are read compatibly and replaced with canonical `maximumPlanPrice` on the next successful plan save. Legacy root `referencePlanPrice` is not authoritative; root `price` / `maximumPlanPrice` are refreshed from the latest valid 100g option on create/update. No bulk migration is required.
 - Duplicate selling options are rejected.
 - Negative plan prices are rejected.
 - If the selected Product has no active selling options, the entire Selling Options block is hidden.
-- Base Plan Price per 100gms remains editable.
+- Plan Price per 100gms is read-only and reflects the current Product 100g Selling Price.
 
 Customer subscriptions are separate from plan masters and store customer-facing snapshots such as Product, selling option, weight, unit price, frequency and delivery schedule.
 
@@ -219,6 +222,14 @@ Customer subscriptions are separate from plan masters and store customer-facing 
 - If unused, ask confirmation and permanently delete.
 - If used, block deletion.
 - Do not infer plan usage merely from Product/frequency when there is no explicit plan reference; use the actual stored plan reference where available.
+
+## Rack Locations — Thresholds
+
+- Rack Locations store the user-entered `thresholdValue` and `thresholdUnit` (`gms` or `kg`) unchanged, alongside `thresholdGrams`, normalized to grams for internal calculations.
+- Changing the unit selection must not convert or otherwise alter the entered value. A positive finite threshold is required when creating or saving a Rack Location.
+- Create and edit forms expose the value and unit, and the listing displays the saved value with its saved unit. Existing records without threshold fields remain unset until a user explicitly enters a threshold; the UI must not invent or silently persist a value for those legacy records.
+- The current repository baseline had no threshold fields in the Rack Locations UI, `Location` type, or write payload, and no remaining `locations.thresholdGrams` consumer was found. Existing location selection in Growing Batches continues to use the location name and active flag.
+- Rack Location create/update validates the location name and threshold value/unit before any Firestore write and reports validation or save errors through the centralized top-right SweetAlert2 toast. Threshold values must be finite and greater than zero.
 
 ## 9. Current UX/implementation decisions
 
