@@ -453,9 +453,7 @@ function CreateBatch({
     try {
       const location = locations.find(l => l.id === locationId);
       const items = selectedProducts.map(row => buildBatchItem(row.product, harvestDate, row.trays));
-      const batchNumber = `B-${new Date().getTime().toString().slice(-6)}`;
       await createGrowingBatch({
-        batchNumber,
         harvestDate,
         startDate: items.map(item => item.startDate).sort()[0],
         locationId,

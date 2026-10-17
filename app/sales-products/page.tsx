@@ -23,7 +23,7 @@ const empty = {
   name: "", sku: "", slug: "", description: "", shortDescription: "", imageUrl: "",
   type: "single" as SalesProductType,
   components: [] as SalesProductComponent[], mrp: 0, sellingPrice: 0,
-  oneTimePurchase: true, subscriptionPurchase: false, active: true, featured: false, sortOrder: 0, sellingOptions: [] as SalesProductSellingOption[]
+  active: true, featured: false, sortOrder: 0, sellingOptions: [] as SalesProductSellingOption[]
 };
 
 function slugify(v: string) { return v.toLowerCase().trim().replace(/[^a-z_-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, ""); }
@@ -107,7 +107,6 @@ export default function SalesProductsPage() {
         : (item.components ?? []).map(component => ({ ...component, quantityGrams: 100, percentage: 100 })),
       mrp: Number(hundredGramOption?.mrp ?? item.mrp ?? item.sellingPrice ?? 0),
       sellingPrice: Number(hundredGramOption?.price ?? item.sellingPrice ?? 0),
-      oneTimePurchase: item.oneTimePurchase !== false, subscriptionPurchase: Boolean(item.subscriptionPurchase),
       active: item.active !== false, featured: Boolean(item.featured), sortOrder: Number(item.sortOrder ?? 0),
       sellingOptions
     });
@@ -243,8 +242,8 @@ export default function SalesProductsPage() {
         name: form.name.trim(), sku: sku || undefined, slug: sanitizeSlug(form.slug.trim()) || slugify(form.name),
         description: form.description.trim() || undefined, shortDescription: form.shortDescription.trim() || undefined,
         imageUrl: form.imageUrl.trim(), type: form.type, components,
-        mrp: Number(hundredGramOption?.mrp), sellingPrice: Number(hundredGramOption?.price), currency: "INR", oneTimePurchase: form.oneTimePurchase,
-        subscriptionPurchase: form.subscriptionPurchase, active: form.active, featured: form.featured, sortOrder: Number(form.sortOrder), sellingOptions
+        mrp: Number(hundredGramOption?.mrp), sellingPrice: Number(hundredGramOption?.price), currency: "INR", oneTimePurchase: true,
+        subscriptionPurchase: true, active: form.active, featured: form.featured, sortOrder: Number(form.sortOrder), sellingOptions
       };
       setSaving(true);
       if (editing) await updateSalesProduct(editing, data); else await createSalesProduct(data);
@@ -307,8 +306,6 @@ export default function SalesProductsPage() {
               <div className="col-sm-6"><label className="form-label">Selling Price (₹) *</label><input className="form-control" type="number" min="0.01" step="0.01" value={form.sellingPrice} readOnly /><div className="form-text">Actual customer price from the 100gms salable option.</div></div>
             </div>
             {Number(form.mrp) > Number(form.sellingPrice) && Number(form.sellingPrice) > 0 && <div className="alert alert-success py-2 mb-3"><strong>Customer saving:</strong> ₹{(Number(form.mrp) - Number(form.sellingPrice)).toLocaleString("en-IN")}</div>}
-            <div className="form-check mb-2"><input className="form-check-input" type="checkbox" id="one-time" checked={form.oneTimePurchase} disabled /><label className="form-check-label" htmlFor="one-time">Available for one-time purchase</label></div>
-            <div className="form-check"><input className="form-check-input" type="checkbox" id="subscription" checked={form.subscriptionPurchase} disabled /><label className="form-check-label" htmlFor="subscription">Available for subscription</label></div>
           </div>
         </div>
         <div className="card border mt-4"><div className="card-header"><strong>Status</strong></div><div className="card-body"><div className="form-check mb-2"><input className="form-check-input" type="checkbox" id="active" checked={form.active} onChange={e=>setForm({...form,active:e.target.checked})}/><label className="form-check-label" htmlFor="active">Active and available</label></div><div className="form-check mb-3"><input className="form-check-input" type="checkbox" id="featured" checked={form.featured} onChange={e=>setForm({...form,featured:e.target.checked})}/><label className="form-check-label" htmlFor="featured">Featured</label></div><label className="form-label">Sort order</label><input className="form-control" type="number" step="1" value={form.sortOrder} onChange={e=>setForm({...form,sortOrder:Number(e.target.value)})}/></div></div>

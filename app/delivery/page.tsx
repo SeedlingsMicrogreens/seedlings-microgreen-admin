@@ -3,10 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "@/components/admin/AdminPage";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { createRecord, listCollection, updateRecord } from "@/lib/firestore";
+import { listCollection, updateRecord } from "@/lib/firestore";
+import { saveDeliveryUser as saveDeliveryUserRecord } from "@/lib/deliveryUserAdminService";
 import { assignOrderToDelivery, updateDeliveryAssignmentStatus } from "@/lib/deliveryService";
 import { confirmAction, showSuccess } from "@/lib/alerts";
-import type { DeliveryAssignment, DeliveryUser, DeliveryUserStatus } from "@/types/delivery";
+import type { DeliveryAssignment, DeliveryUser } from "@/types/delivery";
 import type { Order } from "@/types/order";
 import type { SalesProduct } from "@/types/salesProduct";
 import type { SubscriptionDelivery } from "@/types/subscriptionDelivery";
@@ -130,13 +131,18 @@ export default function DeliveryPage() {
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") ?? "").trim();
     const mobileNumber = String(form.get("mobileNumber") ?? "").trim();
-    const authUid = String(form.get("authUid") ?? "").trim();
-    if (!name || !mobileNumber || !authUid) { setError("Name, mobile number and Firebase Auth UID are required."); return; }
+    if (!name || !mobileNumber) { setError("Name and mobile number are required."); return; }
+    setError("");
     try {
-      const data = { authUid, name, mobileNumber, email: String(form.get("email") ?? "").trim(), vehicleType: String(form.get("vehicleType") ?? "").trim(), vehicleNumber: String(form.get("vehicleNumber") ?? "").trim(), status: "active" as DeliveryUserStatus };
-      if (selectedUser) await updateRecord("deliveryUsers", selectedUser.id, data); else await createRecord("deliveryUsers", data);
+      await saveDeliveryUserRecord({
+        name,
+        mobileNumber,
+        email: String(form.get("email") ?? "").trim(),
+        vehicleType: String(form.get("vehicleType") ?? "").trim(),
+        vehicleNumber: String(form.get("vehicleNumber") ?? "").trim(),
+      }, selectedUser?.id);
       setSelectedUser(null); setCreatingUser(false); setTab("users"); await load();
-    } catch { setError(selectedUser ? "Unable to update delivery user." : "Unable to create delivery user."); }
+    } catch (err) { setError(err instanceof Error ? err.message : selectedUser ? "Unable to update delivery user." : "Unable to create delivery user."); }
   }
 
   async function toggleUser(u: DeliveryUser) {
@@ -260,5 +266,5 @@ export default function DeliveryPage() {
 }
 
 function DeliveryUserForm({ user, onSubmit, onCancel }: { user: DeliveryUser | null; onSubmit: (e: React.FormEvent<HTMLFormElement>) => void; onCancel: () => void }) {
-  return <form onSubmit={onSubmit}><div className="card-body"><div className="row g-4"><div className="col-lg-7"><div className="card border"><div className="card-header"><strong>Personal Information</strong></div><div className="card-body"><div className="row"><div className="col-md-6 mb-3"><label className="form-label">Name *</label><input name="name" className="form-control" defaultValue={user?.name || ""} required /></div><div className="col-md-6 mb-3"><label className="form-label">Mobile *</label><input name="mobileNumber" className="form-control" defaultValue={user?.mobileNumber || ""} required /></div></div><div><label className="form-label">Email</label><input name="email" type="email" className="form-control" defaultValue={user?.email || ""} /></div></div></div><div className="card border mt-3"><div className="card-header"><strong>Vehicle</strong></div><div className="card-body"><div className="row"><div className="col-md-6"><label className="form-label">Vehicle type</label><input name="vehicleType" className="form-control" placeholder="Bike" defaultValue={user?.vehicleType || ""} /></div><div className="col-md-6"><label className="form-label">Vehicle number</label><input name="vehicleNumber" className="form-control" defaultValue={user?.vehicleNumber || ""} /></div></div></div></div></div><div className="col-lg-5"><div className="card border"><div className="card-header"><strong>Authentication</strong></div><div className="card-body"><label className="form-label">Firebase Auth UID *</label><input name="authUid" className="form-control font-monospace" defaultValue={user?.authUid || ""} required /><div className="form-text">Use the UID of the Firebase Authentication account linked to this delivery user.</div></div></div></div></div></div><div className="card-footer d-flex justify-content-end gap-2"><button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button><button className="btn btn-success">{user ? "Update Delivery User" : "Create Delivery User"}</button></div></form>;
+  return <form onSubmit={onSubmit}><div className="card-body"><div className="row g-4"><div className="col-lg-7"><div className="card border"><div className="card-header"><strong>Personal Information</strong></div><div className="card-body"><div className="row"><div className="col-md-6 mb-3"><label className="form-label">Name *</label><input name="name" className="form-control" defaultValue={user?.name || ""} required /></div><div className="col-md-6 mb-3"><label className="form-label">Mobile *</label><input name="mobileNumber" className="form-control" defaultValue={user?.mobileNumber || ""} required /></div></div><div><label className="form-label">Email</label><input name="email" type="email" className="form-control" defaultValue={user?.email || ""} /></div></div></div><div className="card border mt-3"><div className="card-header"><strong>Vehicle</strong></div><div className="card-body"><div className="row"><div className="col-md-6"><label className="form-label">Vehicle type</label><input name="vehicleType" className="form-control" placeholder="Bike" defaultValue={user?.vehicleType || ""} /></div><div className="col-md-6"><label className="form-label">Vehicle number</label><input name="vehicleNumber" className="form-control" defaultValue={user?.vehicleNumber || ""} /></div></div></div></div></div><div className="col-lg-5"><div className="card border"><div className="card-header"><strong>Authentication</strong></div><div className="card-body"><div className="form-text">The normalized mobile number is used as this delivery user's Firebase Authentication ID.</div></div></div></div></div></div><div className="card-footer d-flex justify-content-end gap-2"><button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button><button className="btn btn-success">{user ? "Update Delivery User" : "Create Delivery User"}</button></div></form>;
 }

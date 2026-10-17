@@ -1,3 +1,20 @@
+## Admin Product Availability, Growing Batch Number, and Delivery User Identity
+
+- Removed the Product purchase-availability controls and force both saved
+  availability fields to `true` in the Product service.
+- Generate Growing Batch numbers as `B-DDMMYYYY-NNN` in `Asia/Kolkata`.
+  Serialize allocation using a per-date Firestore counter and transaction,
+  seeded from existing batch numbers for that date; existing batches are not
+  renumbered.
+- Removed the delivery-user Auth UID input and wired the form to the existing
+  server Admin API, which uses the normalized mobile number as the Auth UID.
+  Firebase initialization and credential loading are preserved. Declared
+  `firebase-admin` 14.5.0 in the package manifest and lockfile because the
+  server Admin API imports its app, auth, and Firestore modules.
+- Validation: `npm test` passed (95 passed, 1 skipped); `npm run typecheck`,
+  `npm run build`, and `git diff --check` passed. No live Firebase or emulator
+  verification was performed.
+
 ## Subscription Masters — Listing Columns
 
 - Updated the Subscription Plans listing to show Product, Plan, Frequency,
@@ -541,3 +558,13 @@ Future small fixes should normally update `CHANGELOG.md` rather than creating an
 - Removed stray waste-debug references accidentally left in unrelated growing-batch functions.
 - Removed an invalid debug payload referencing out-of-scope waste variables from the harvest inventory adjustment path.
 - Waste reconciliation debug logging remains scoped only to `updateGrowingBatchSoldQuantity`.
+
+## CMS alignment — 2026-10-17
+- Website CMS menu grouping and homepage Trust Points source mapping.
+- Navigation route aligned with the website Journey route where configured.
+
+
+## 2026-10-17 — CMS sidebar structure
+- Reorganized Website CMS sidebar into the agreed page-oriented hierarchy while retaining existing editor routes.
+- Removed duplicate top-level Hero Slider and Trust Points menu entries; retained their editors under Homepage Content navigation.
+- No Firebase configuration or website fallback content changed.

@@ -32,6 +32,7 @@ type SectionKey=typeof SECTIONS[number]["key"];
 type RecordData={id:string;key:SectionKey;status:"draft"|"published";[k:string]:unknown};
 export default function HomepageContent(){
  const[selected,setSelected]=useState<SectionKey>(SECTIONS[0].key),[form,setForm]=useState<RecordData|null>(null),[error,setError]=useState(""),[saving,setSaving]=useState(false);
+ useEffect(()=>{const requestedSection=new URLSearchParams(window.location.search).get("section");if(SECTIONS.some(s=>s.key===requestedSection))setSelected(requestedSection as SectionKey)},[]);
  const section=SECTIONS.find(s=>s.key===selected)!;
  async function load(){try{const r=await listCollectionByField<RecordData>("websiteHomepageContent","key",selected);setForm(r[0]??{id:"",key:selected,status:"draft"});setError("")}catch{setError("Unable to load homepage content.")}}
  useEffect(()=>{void load()},[selected]);

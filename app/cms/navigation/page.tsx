@@ -7,13 +7,13 @@ import { showSuccess } from "@/lib/alerts";
 const ITEMS=[
  {key:"home",label:"Home",url:"/",location:"header" as const},
  {key:"microgreens",label:"Microgreens",url:"/microgreens",location:"header" as const},
- {key:"journey",label:"Journey",url:"/journey",location:"header" as const},
+ {key:"journey",label:"Journey",url:"/our-journey",location:"header" as const},
  {key:"contact",label:"Contact",url:"/contact",location:"header" as const},
  {key:"account",label:"Account",url:"/account",location:"header" as const},
  {key:"cart",label:"Cart",url:"/cart",location:"header" as const},
  {key:"shopCta",label:"Shop Fresh",url:"/microgreens",location:"header" as const},
  {key:"footerMicrogreens",label:"Microgreens",url:"/microgreens",location:"footer" as const},
- {key:"footerJourney",label:"Our Journey",url:"/journey",location:"footer" as const},
+ {key:"footerJourney",label:"Our Journey",url:"/our-journey",location:"footer" as const},
  {key:"footerContact",label:"Contact",url:"/contact",location:"footer" as const},
  {key:"footerAccount",label:"My Account",url:"/account",location:"footer" as const},
 ] as const;

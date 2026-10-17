@@ -60,21 +60,24 @@ test("Single component stores 100 numerically as a 100% share, not package grams
   assert.doesNotThrow(() => validateSingleComponentShare("multiple", [{ quantityGrams: 0, percentage: 100 }]));
 });
 
-test("form keeps price/purchase review-only and maps Single quantity as percent", () => {
+test("form keeps prices review-only, removes purchase availability controls, and maps Single quantity as percent", () => {
   const page = readFileSync("app/sales-products/page.tsx", "utf8");
   assert.match(page, /Quantity \(%\) \*/);
   assert.match(page, /value=\{100\} readOnly/);
   assert.match(page, /value=\{form\.mrp\} readOnly/);
   assert.match(page, /value=\{form\.sellingPrice\} readOnly/);
-  assert.match(page, /checked=\{form\.oneTimePurchase\} disabled/);
-  assert.match(page, /checked=\{form\.subscriptionPurchase\} disabled/);
+  assert.doesNotMatch(page, /Available for one-time purchase|Available for subscription/);
+  assert.match(page, /oneTimePurchase: true,\s*subscriptionPurchase: true/);
   assert.match(page, /quantityGrams: 100, percentage: 100/);
   assert.match(page, /ensureDefault100gSellingOption/);
   assert.match(page, /validateRequired100gSellingOption\(sellingOptions\)/);
 });
 
-test("Sales Product create and update service paths both enforce the 100g option", () => {
+test("Sales Product create and update force both purchase availability fields on", () => {
   const service = readFileSync("lib/salesProductService.ts", "utf8");
   assert.match(service, /createSalesProduct[\s\S]*?validateRequired100gSellingOption\(data\.sellingOptions\)/);
   assert.match(service, /updateSalesProduct[\s\S]*?validateRequired100gSellingOption\(data\.sellingOptions \?\? current\.sellingOptions\)/);
+  assert.equal((service.match(/oneTimePurchase: true/g) ?? []).length, 2);
+  assert.equal((service.match(/subscriptionPurchase: true/g) ?? []).length, 2);
+  assert.doesNotMatch(service, /Select at least one purchase option/);
 });

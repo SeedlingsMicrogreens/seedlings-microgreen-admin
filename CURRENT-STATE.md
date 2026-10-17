@@ -152,7 +152,7 @@ Example: 100g packaging × 10 boxes → `weightGrams = 1000`; component demand i
 
 - A Single Product has one Microgreen component with a fixed numeric `100` share, displayed as **Quantity (%)**. Its share is 100%, not a 100g package size; selected selling-option packaging determines actual sold grams. Combo component percentages and their calculations remain unchanged.
 - Create and Update forms always include one real 100g selling option, preserving existing options and never duplicating an existing 100g option. A valid 100g option (positive MRP and price, price not above MRP) is required in both the form and Sales Product service before writes.
-- Price & Purchase is review-only. The displayed MRP/selling price follow the 100g salable option, while purchase availability retains and displays the Product's saved values.
+- Price & Purchase is review-only. The displayed MRP/selling price follow the 100g salable option. One-time and subscription availability are always enabled and saved as `true`.
 
 ### Offers date ranges
 
@@ -353,3 +353,18 @@ Customer subscriptions are separate from plan masters and store customer-facing 
 
 ### Delivery Button Label
 - The existing delivery assignment action keeps its `delivered` status update and workflow; its visible label is **Mark as Delivered**.
+
+### Product Availability, Growing Batch Numbers, and Delivery User Identity
+- The Sales Product form does not expose purchase-availability checkboxes. The Sales Product service writes `oneTimePurchase: true` and `subscriptionPurchase: true` on create and update.
+- New Growing Batches receive `B-DDMMYYYY-NNN` numbers using the `Asia/Kolkata` calendar date. A per-date Firestore counter and the existing signed-in Firestore transaction serialize allocations; the current date's existing numbered batches seed a missing counter. Existing batch numbers are not rewritten.
+- Delivery-user forms collect a mobile number, not a Firebase Auth UID. The existing server-side Admin API normalizes the number to Indian E.164, uses it as the Auth UID, rejects duplicate/already-linked accounts, and refuses edits that require changing an immutable UID. Firebase initialization and credential loading are unchanged. `firebase-admin` is declared as an application dependency and locked at 14.5.0 so clean installs include the Admin SDK.
+- Validation for these changes: `npm test` passed (95 passed, 1 skipped), `npm run typecheck`, `npm run build`, and `git diff --check` passed. No live Firebase or emulator verification was performed.
+
+## CMS alignment (2026-10-17)
+- Website CMS menu grouping and homepage Trust Points source mapping.
+
+
+## CMS sidebar alignment (2026-10-17)
+- Reorganized the Website CMS sidebar into Homepage Content (with Hero Slider, Trust Points, Our Promise, Why Choose Us, App Banner), Website Pages (Microgreens, Our Journey, Contact), Testimonials, Seedlings Feedback, FAQ, and Navigation & Links.
+- Kept the existing CMS editor routes and Firestore data sources; removed duplicate top-level Hero Slider and Trust Points entries from the sidebar.
+- Preserved existing hardcoded fallback content in website sections; this Admin-only change does not alter Website fallback behavior or Firebase configuration.

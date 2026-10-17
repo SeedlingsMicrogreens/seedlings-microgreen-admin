@@ -3,6 +3,7 @@ import { db } from "./firebase";
 import { auditEvent } from "./firestore";
 import { canAutoCloseBatch, isBatchClosed, itemRemainingStockGrams, planBatchClosure } from "./batchAccounting";
 import { validateGrowingBatchCanBeDeleted, type GrowingBatchDeletionDependencies } from "./growingBatchDeletion";
+import { growingBatchBusinessDate, growingBatchNumberForSequence, growingBatchSequence, nextGrowingBatchSequence } from "./growingBatchNumber";
 import type { Product } from "@/types/catalog";
 import type { Fulfilment } from "@/types/fulfilment";
 import type {
@@ -142,7 +143,6 @@ export async function updateGrowingBatchBeforeStart(data: {
 }
 
 export async function createGrowingBatch(data: {
-  batchNumber: string;
   harvestDate: string;
   startDate?: string;
   locationId?: string;
@@ -152,17 +152,32 @@ export async function createGrowingBatch(data: {
   uid: string;
   email?: string;
 }) {
-  if (!data.batchNumber.trim()) throw new Error("Batch number is required.");
   if (!data.harvestDate) throw new Error("Harvest date is required.");
   if (!data.items.length) throw new Error("Add at least one microgreen to the batch.");
 
   const ref = doc(collection(db, "growingBatches"));
   const items = data.items.map((item, index) => ({ ...item, id: `${ref.id}-${index + 1}` }));
   const startDate = data.startDate || items.map(i => i.startDate).sort()[0] || data.harvestDate;
+  const businessDate = growingBatchBusinessDate();
+  const batchPrefix = `B-${businessDate.displayDate}-`;
+  const existingBatchSnapshot = await getDocs(query(
+    collection(db, "growingBatches"),
+    where("batchNumber", ">=", batchPrefix),
+    where("batchNumber", "<", `${batchPrefix}\uf8ff`),
+  ));
+  const existingMaximum = existingBatchSnapshot.docs.reduce((maximum, snapshot) => {
+    return Math.max(maximum, growingBatchSequence(snapshot.get("batchNumber"), businessDate.displayDate) ?? 0);
+  }, 0);
+  const counterRef = doc(db, "growingBatchNumberCounters", businessDate.dateKey);
+  let batchNumber = "";
 
   await runTransaction(db, async transaction => {
+    const counterSnapshot = await transaction.get(counterRef);
+    const sequence = nextGrowingBatchSequence(counterSnapshot.get("lastSequence"), existingMaximum);
+    batchNumber = growingBatchNumberForSequence(businessDate.displayDate, sequence);
+    transaction.set(counterRef, { lastSequence: sequence, updatedAt: serverTimestamp() });
     transaction.set(ref, {
-      batchNumber: data.batchNumber.trim(),
+      batchNumber,
       startDate,
       harvestDate: data.harvestDate,
       locationId: data.locationId ?? "",
@@ -177,7 +192,7 @@ export async function createGrowingBatch(data: {
     });
   });
 
-  await auditEvent("create", "growingBatches", ref.id, `Created growing batch ${data.batchNumber.trim()}`);
+  await auditEvent("create", "growingBatches", ref.id, `Created growing batch ${batchNumber}`);
   return ref.id;
 }
 

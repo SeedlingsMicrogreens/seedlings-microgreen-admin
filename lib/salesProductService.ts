@@ -14,8 +14,6 @@ export function validateSalesProduct(input: {
   sellingOptions: SalesProductSellingOption[];
   mrp: number;
   sellingPrice: number;
-  oneTimePurchase: boolean;
-  subscriptionPurchase: boolean;
 }) {
   if (!input.name.trim()) throw new Error("Sales product name is required.");
   validateRequired100gSellingOption(input.sellingOptions);
@@ -30,9 +28,6 @@ export function validateSalesProduct(input: {
   }
   if (input.sellingPrice > input.mrp) {
     throw new Error("Selling price cannot be greater than MRP.");
-  }
-  if (!input.oneTimePurchase && !input.subscriptionPurchase) {
-    throw new Error("Select at least one purchase option.");
   }
   if (!input.components.length) throw new Error("At least one product component is required.");
 
@@ -73,7 +68,11 @@ export async function listSalesProducts() {
 export async function createSalesProduct(data: Omit<SalesProduct, "id" | "createdAt" | "updatedAt">) {
   validateRequired100gSellingOption(data.sellingOptions);
   validateSingleComponentShare(data.type, data.components);
-  return createRecord("salesProducts", data as Record<string, unknown>);
+  return createRecord("salesProducts", {
+    ...data,
+    oneTimePurchase: true,
+    subscriptionPurchase: true,
+  } as Record<string, unknown>);
 }
 
 export async function updateSalesProduct(id: string, data: Partial<Omit<SalesProduct, "id" | "createdAt" | "updatedAt">>) {
@@ -82,7 +81,11 @@ export async function updateSalesProduct(id: string, data: Partial<Omit<SalesPro
   const current = snapshot.data() as SalesProduct;
   validateRequired100gSellingOption(data.sellingOptions ?? current.sellingOptions);
   validateSingleComponentShare(data.type ?? current.type, data.components ?? current.components);
-  return updateRecord("salesProducts", id, data as Record<string, unknown>);
+  return updateRecord("salesProducts", id, {
+    ...data,
+    oneTimePurchase: true,
+    subscriptionPurchase: true,
+  } as Record<string, unknown>);
 }
 
 export async function isSalesProductReferencedByOrder(id: string) {
