@@ -5,7 +5,7 @@ import type { Product } from "@/types/catalog";
 import type { SalesProduct } from "@/types/salesProduct";
 import type { Order, OrderItem } from "@/types/order";
 import type { GrowingBatch } from "@/types/growingBatch";
-import type { Subscription } from "@/types/subscription";
+import { nextScheduledDeliveryDate, type Subscription } from "@/types/subscription";
 import type { Fulfilment, FulfilmentPackLine, FulfilmentAllocation, PackingItem } from "@/types/fulfilment";
 import type { SubscriptionDelivery } from "@/types/subscriptionDelivery";
 import { isBatchClosed, itemRemainingStockGrams, packingStatusFromItems, productTotalsToRestore, restoreBatchItemStock, reverseOrderItemPacking, statusBeforePacked } from "./batchAccounting";
@@ -29,9 +29,7 @@ export { buildPackingIdempotencyKey, componentGramsPerBox, requiredItemGrams, sa
 function nextSubscriptionDeliveryDate(subscription: Subscription, deliveryDate: string, deliveryNumber: number) {
   const total = Number(subscription.totalDeliveries || 0);
   if (total > 0 && deliveryNumber >= total) return "";
-  const date = new Date(`${deliveryDate}T00:00:00`);
-  date.setDate(date.getDate() + 7);
-  return date.toISOString().slice(0, 10);
+  return nextScheduledDeliveryDate(deliveryDate);
 }
 
 async function createOrUpdateSubscriptionDeliveryInTransaction(

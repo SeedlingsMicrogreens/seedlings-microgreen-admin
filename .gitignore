@@ -5,3 +5,5 @@ out/
 .env.*.local
 *.log
 .DS_Store
+# Subscription date audit reports (scripts/audit-subscription-dates.ts)
+subscription-date-audit-*.json

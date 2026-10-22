@@ -1,10 +1,19 @@
 import { collection, doc, getDoc, getDocs, query, runTransaction, serverTimestamp, where } from "firebase/firestore";
 import { db } from "./firebase";
 import { auditEvent } from "./firestore";
-import { createSubscriptionDeliveryAtHandoverInTransaction, updateSubscriptionDeliveryStatusInTransaction } from "./subscriptionDeliveryService";
+import {
+  applySubscriptionDeliveryAtHandoverInTransaction,
+  findSubscriptionDeliveryRefsForOrder,
+  prepareSubscriptionDeliveryAtHandoverInTransaction,
+  updateSubscriptionDeliveryStatusInTransaction,
+} from "./subscriptionDeliveryService";
 import type { DeliveryUser, DeliveryAssignment } from "@/types/delivery";
 import type { Order, OrderStatus } from "@/types/order";
-import { recordBatchHandoverSalesInTransaction } from "./growingBatchService";
+import { runHandoverWithOutcomeCheck, validateOrderForHandover } from "./deliveryHandover";
+import {
+  applyBatchHandoverSalesInTransaction,
+  prepareBatchHandoverSalesInTransaction,
+} from "./growingBatchService";
 import { sendTransactionNotification } from "./notificationService";
 
 export async function assignOrderToDelivery(
@@ -24,28 +33,27 @@ export async function assignOrderToDelivery(
   const assignmentRef = doc(collection(db, "deliveryAssignments"));
   const fulfilmentSnapshot = await getDocs(query(collection(db, "fulfilments"), where("orderId", "==", order.id)));
 
-  await runTransaction(db, async (transaction) => {
+  const handoverTransaction = runTransaction(db, async (transaction) => {
     const snapshot = await transaction.get(orderRef);
-    if (!snapshot.exists()) throw new Error("Order no longer exists.");
-
-    const current = { id: snapshot.id, ...(snapshot.data() as Omit<Order, "id">) } as Order;
-    if (current.status !== "packed") {
-      throw new Error(`Order ${current.orderNumber || current.id} is no longer packed and cannot be handed over.`);
-    }
+    const current = validateOrderForHandover(
+      snapshot.exists() ? { id: snapshot.id, ...(snapshot.data() as Omit<Order, "id">) } as Order : undefined,
+      order.id,
+    );
 
     const history = Array.isArray(current.statusHistory) ? current.statusHistory : [];
     const nextStatus: OrderStatus = "out_for_delivery";
 
-    // Read batch allocations and update sold quantities before any other transaction writes.
-    await recordBatchHandoverSalesInTransaction(
+    // Prepare all transaction changes before the first write.
+    const batchHandoverPlan = await prepareBatchHandoverSalesInTransaction(
       transaction,
       fulfilmentSnapshot.docs.map(snapshot => doc(db, "fulfilments", snapshot.id)),
-      adminUid,
-      adminEmail,
     );
+    const subscriptionHandoverPlan = await prepareSubscriptionDeliveryAtHandoverInTransaction(transaction, current);
 
-    // Read/create the subscription delivery before the remaining transaction writes.
-    await createSubscriptionDeliveryAtHandoverInTransaction(transaction, order, adminUid, adminEmail);
+    applyBatchHandoverSalesInTransaction(transaction, batchHandoverPlan, adminUid, adminEmail);
+    if (subscriptionHandoverPlan) {
+      applySubscriptionDeliveryAtHandoverInTransaction(transaction, subscriptionHandoverPlan, adminUid, adminEmail);
+    }
 
     transaction.update(orderRef, {
       status: nextStatus,
@@ -89,13 +97,38 @@ export async function assignOrderToDelivery(
     }
 
   });
+  await runHandoverWithOutcomeCheck(handoverTransaction, async () => {
+    const [orderSnapshot, assignmentSnapshot] = await Promise.all([
+      getDoc(orderRef),
+      getDoc(assignmentRef),
+    ]);
+    if (!orderSnapshot.exists() || !assignmentSnapshot.exists()) return false;
+    const latestOrder = orderSnapshot.data() as Order;
+    const latestAssignment = assignmentSnapshot.data() as DeliveryAssignment;
+    return latestOrder.status === "out_for_delivery"
+      && latestAssignment.orderId === order.id
+      && latestAssignment.deliveryUserId === deliveryUser.id
+      && latestAssignment.status === "out_for_delivery";
+  });
 
   await auditEvent("create", "deliveryAssignments", assignmentRef.id, `Assigned ${order.orderNumber || order.id} to ${deliveryUser.name}`);
-  try {
-    await sendTransactionNotification({ event: "out_for_delivery", orderId: order.id });
-  } catch (error) {
-    console.error("Customer out-for-delivery notification failed", error);
-  }
+  void sendTransactionNotification({ event: "out_for_delivery", orderId: order.id })
+    .catch(error => console.error("Customer out-for-delivery notification failed after handover committed", error));
+
+  return {
+    id: assignmentRef.id,
+    orderId: order.id,
+    orderNumber: order.orderNumber ?? order.id,
+    deliveryUserId: deliveryUser.id,
+    deliveryUserAuthUid: deliveryUser.authUid,
+    deliveryUserName: deliveryUser.name,
+    deliveryUserMobile: deliveryUser.mobileNumber,
+    status: "out_for_delivery",
+    assignedByUid: adminUid,
+    assignedByEmail: adminEmail ?? "",
+    assignedAt: new Date(),
+    updatedAt: new Date(),
+  } satisfies DeliveryAssignment;
 }
 
 export async function updateDeliveryAssignmentStatus(
@@ -109,7 +142,10 @@ export async function updateDeliveryAssignmentStatus(
   const assignmentSnapshot = await getDoc(assignmentRef);
   if (!assignmentSnapshot.exists()) throw new Error("Delivery assignment not found.");
   const assignmentData = assignmentSnapshot.data() as DeliveryAssignment;
-  const fulfilmentSnapshot = await getDocs(query(collection(db, "fulfilments"), where("orderId", "==", assignmentData.orderId)));
+  const [fulfilmentSnapshot, subscriptionDeliveryRefs] = await Promise.all([
+    getDocs(query(collection(db, "fulfilments"), where("orderId", "==", assignmentData.orderId))),
+    findSubscriptionDeliveryRefsForOrder(assignmentData.orderId),
+  ]);
 
   const orderStatusByDeliveryStatus: Record<DeliveryAssignment["status"], OrderStatus> = {
     assigned: "out_for_delivery",
@@ -155,6 +191,7 @@ export async function updateDeliveryAssignmentStatus(
       subscriptionDeliveryStatus,
       adminUid,
       adminEmail,
+      subscriptionDeliveryRefs,
     );
 
     transaction.update(assignmentRef, {
@@ -193,16 +230,10 @@ export async function updateDeliveryAssignmentStatus(
   });
   await auditEvent("update", "deliveryAssignments", assignmentId, `Delivery assignment status changed to ${status}`);
   if (status === "delivered") {
-    try {
-      await sendTransactionNotification({ event: "order_delivered", orderId: assignmentData.orderId });
-    } catch (error) {
-      console.error("Customer delivered notification failed", error);
-    }
+    void sendTransactionNotification({ event: "order_delivered", orderId: assignmentData.orderId })
+      .catch(error => console.error("Customer delivered notification failed", error));
   } else if (status === "cancelled") {
-    try {
-      await sendTransactionNotification({ event: "order_cancelled", orderId: assignmentData.orderId });
-    } catch (error) {
-      console.error("Customer cancellation notification failed", error);
-    }
+    void sendTransactionNotification({ event: "order_cancelled", orderId: assignmentData.orderId })
+      .catch(error => console.error("Customer cancellation notification failed", error));
   }
 }

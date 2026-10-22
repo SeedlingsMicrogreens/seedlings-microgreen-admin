@@ -105,16 +105,28 @@ export default function DeliveryPage() {
     if (!confirmed) return;
     setWorking(true);
     setError("");
+    const handedOverOrderIds: string[] = [];
     try {
       for (const order of selectedOrders) {
-        await assignOrderToDelivery(order, deliveryUser, user.uid, user.email ?? undefined);
+        const assignment = await assignOrderToDelivery(order, deliveryUser, user.uid, user.email ?? undefined);
+        handedOverOrderIds.push(order.id);
+        setOrders(current => current.map(item => item.id === order.id
+          ? { ...item, status: "out_for_delivery", deliveryUserId: deliveryUser.id, deliveryUserName: deliveryUser.name }
+          : item));
+        setAssignments(current => [
+          ...current.filter(item => item.orderId !== order.id || ["delivered", "cancelled"].includes(item.status)),
+          assignment,
+        ]);
       }
       setSelectedOrderIds([]);
       setSelectedUserId("");
-      await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to hand over selected orders.");
-      await load();
+      const message = err instanceof Error ? err.message : "Unable to hand over selected orders.";
+      const remainingOrderIds = selectedOrderIds.filter(id => !handedOverOrderIds.includes(id));
+      setSelectedOrderIds(remainingOrderIds);
+      setError(handedOverOrderIds.length
+        ? `${handedOverOrderIds.length} order(s) were handed over. The remaining selected orders were not confirmed: ${message}`
+        : message);
     } finally { setWorking(false); }
   }
 
@@ -179,7 +191,10 @@ export default function DeliveryPage() {
         <div className="card mb-3">
           <div className="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
             <div><h3 className="card-title mb-0">Packed Orders — Ready for Handover</h3><div className="small text-muted mt-1">All fully packed orders are shown until they are handed over for delivery.</div></div>
-            <button className="btn btn-sm btn-outline-secondary" onClick={selectAllVisible} disabled={!readyForHandover.length}>{selectedOrderIds.length === readyForHandover.length && readyForHandover.length ? "Clear selection" : "Select all"}</button>
+            <div className="d-flex gap-2">
+              <button className="btn btn-sm btn-outline-secondary" onClick={() => void load()} disabled={loading || working}>Refresh</button>
+              <button className="btn btn-sm btn-outline-secondary" onClick={selectAllVisible} disabled={!readyForHandover.length}>{selectedOrderIds.length === readyForHandover.length && readyForHandover.length ? "Clear selection" : "Select all"}</button>
+            </div>
           </div>
           <div className="card-body p-0">
             {readyForHandover.map(order => <div key={order.id} className="border-bottom p-3">
@@ -209,7 +224,7 @@ export default function DeliveryPage() {
                   {activeUsers.map(u => <option key={u.id} value={u.id}>{u.name} — {u.mobileNumber}{u.vehicleNumber ? ` — ${u.vehicleNumber}` : ""}</option>)}
                 </select>
               </div>
-              <div className="col-lg-4"><button className="btn btn-success w-100" disabled={working || !selectedOrderIds.length || !selectedUserId} onClick={() => void handover()}><i className="bi bi-box-arrow-right me-1" /> {working ? "Handing over..." : `Hand over ${selectedOrderIds.length || ""} selected`}</button></div>
+              <div className="col-lg-4"><button className="btn btn-success w-100" disabled={working || !selectedOrderIds.length || !selectedUserId} onClick={() => void handover()}><i className="bi bi-box-arrow-right me-1" /> {working ? "Saving handover..." : `Hand over ${selectedOrderIds.length || ""} selected`}</button></div>
             </div>
           </div>
         </div>

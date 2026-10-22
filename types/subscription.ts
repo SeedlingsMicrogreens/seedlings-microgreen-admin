@@ -1,3 +1,5 @@
+import { localCalendarDate, nextCalendarDateOnDay } from "@/lib/calendarDate";
+
 export const SUBSCRIPTION_FREQUENCIES = [
   "weekly",
   "monthly",
@@ -76,10 +78,14 @@ export function packLabel(weightGrams: number) {
     : `${weightGrams}g box`;
 }
 
+/** Business rule: every subscription delivery is on a Saturday (0 = Sunday ... 6 = Saturday). */
+export const SUBSCRIPTION_DELIVERY_DAY = 6;
+
+/** The delivery after `previousDeliveryDate`: the next Saturday, i.e. +7 days from a Saturday. */
+export function nextScheduledDeliveryDate(previousDeliveryDate: string) {
+  return nextCalendarDateOnDay(previousDeliveryDate, SUBSCRIPTION_DELIVERY_DAY);
+}
+
 export function nextDeliveryOnDay(date: Date, day: number) {
-  const result = new Date(date);
-  result.setHours(0, 0, 0, 0);
-  const delta = (day - result.getDay() + 7) % 7 || 7;
-  result.setDate(result.getDate() + delta);
-  return result.toISOString().slice(0, 10);
+  return nextCalendarDateOnDay(localCalendarDate(date), day);
 }

@@ -5,6 +5,7 @@ import { AdminPage } from "@/components/admin/AdminPage";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { createSubscription, updateSubscriptionStatus } from "@/lib/subscriptionService";
 import { confirmAction } from "@/lib/alerts";
+import { addCalendarDays, localCalendarDate } from "@/lib/calendarDate";
 import { listCollection } from "@/lib/firestore";
 import type { SalesProduct } from "@/types/salesProduct";
 import type { Customer } from "@/types/customer";
@@ -15,10 +16,11 @@ import {
   frequencyLabel,
   nextDeliveryOnDay,
   packLabel,
+  SUBSCRIPTION_DELIVERY_DAY,
 } from "@/types/subscription";
 import type { Subscription, SubscriptionFrequency, SubscriptionStatus } from "@/types/subscription";
 
-function today() { return new Date().toISOString().slice(0, 10); }
+function today() { return localCalendarDate(new Date()); }
 function dateLabel(v?: string) {
   if (!v) return "Ongoing";
   return new Date(`${v}T00:00:00`).toLocaleDateString();
@@ -131,7 +133,6 @@ function CreateSubscription({ customers, products, uid, email, onCancel, onCreat
   const [quantity, setQuantity] = useState(1);
   const [frequency, setFrequency] = useState<SubscriptionFrequency>("weekly");
   const [startDate, setStartDate] = useState(today());
-  const [deliveryDay, setDeliveryDay] = useState(6); // Saturday default, configurable
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -140,13 +141,8 @@ function CreateSubscription({ customers, products, uid, email, onCancel, onCreat
   const options = (product?.sellingOptions ?? []).filter(o => o.active && o.weightGrams > 0);
   const selectedOption = options.find(o => o.id === optionId);
   const total = deliveriesForFrequency(frequency);
-  const firstDelivery = startDate ? nextDeliveryOnDay(new Date(`${startDate}T00:00:00`), deliveryDay) : "";
-  const endDate = total == null ? "" : (() => {
-    if (!firstDelivery) return "";
-    const d = new Date(`${firstDelivery}T00:00:00`);
-    d.setDate(d.getDate() + (total - 1) * 7);
-    return d.toISOString().slice(0, 10);
-  })();
+  const firstDelivery = startDate ? nextDeliveryOnDay(new Date(`${startDate}T00:00:00`), SUBSCRIPTION_DELIVERY_DAY) : "";
+  const endDate = total == null || !firstDelivery ? "" : addCalendarDays(firstDelivery, (total - 1) * 7);
 
   function chooseProduct(id: string) {
     setProductId(id);
@@ -165,7 +161,7 @@ function CreateSubscription({ customers, products, uid, email, onCancel, onCreat
       const address = customer.addresses?.[0];
       await createSubscription({
         customer, product, sellingOptionId: selectedOption.id, quantity, frequency, startDate,
-        deliveryDay, deliveryAddress: typeof address === "string" ? { address } : (address as Record<string, unknown> | undefined),
+        deliveryAddress: typeof address === "string" ? { address } : (address as Record<string, unknown> | undefined),
         notes, uid, email
       });
       await onCreated();
@@ -184,7 +180,7 @@ function CreateSubscription({ customers, products, uid, email, onCancel, onCreat
           <div className="col-md-5"><label className="form-label">Packs per delivery *</label><input className="form-control" type="number" min="1" step="1" value={quantity} onChange={e => setQuantity(Number(e.target.value))} required/></div>
           <div className="col-md-4"><label className="form-label">Frequency *</label><select className="form-select" value={frequency} onChange={e => setFrequency(e.target.value as SubscriptionFrequency)}>{SUBSCRIPTION_FREQUENCIES.map(f => <option key={f} value={f}>{frequencyLabel(f)}</option>)}</select></div>
           <div className="col-md-4"><label className="form-label">Start date *</label><input className="form-control" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} required/></div>
-          <div className="col-md-4"><label className="form-label">Delivery day *</label><select className="form-select" value={deliveryDay} onChange={e => setDeliveryDay(Number(e.target.value))}><option value={0}>Sunday</option><option value={1}>Monday</option><option value={2}>Tuesday</option><option value={3}>Wednesday</option><option value={4}>Thursday</option><option value={5}>Friday</option><option value={6}>Saturday</option></select><div className="form-text">Phase 1 default: Saturday.</div></div>
+          <div className="col-md-4"><label className="form-label">Delivery day</label><input className="form-control" value="Saturday" readOnly disabled /><div className="form-text">All subscription deliveries are on Saturday.</div></div>
         </div>
         <div className="mt-3"><label className="form-label">Notes</label><textarea className="form-control" rows={3} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional subscription notes..."/></div>
       </div></div></div>

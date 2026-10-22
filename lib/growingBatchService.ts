@@ -831,13 +831,18 @@ export async function closeGrowingBatchFromInventory(
   );
 }
 
-export async function recordBatchHandoverSalesInTransaction(
+export async function prepareBatchHandoverSalesInTransaction(
   transaction: Transaction,
   fulfilmentRefs: DocumentReference[],
-  uid: string,
-  email?: string,
 ) {
-  if (!fulfilmentRefs.length) return { updatedBatchIds: [] as string[], closedBatchIds: [] as string[] };
+  if (!fulfilmentRefs.length) {
+    return {
+      batchUpdates: [] as { ref: DocumentReference; updatedItems: GrowingBatchItem[]; close: boolean }[],
+      fulfilmentRefsToMark: [] as DocumentReference[],
+      updatedBatchIds: [] as string[],
+      closedBatchIds: [] as string[],
+    };
+  }
 
   const fulfilmentSnapshots = await Promise.all(fulfilmentRefs.map(ref => transaction.get(ref)));
   const allocationsByBatch = new Map<string, Map<string, number>>();
@@ -860,13 +865,6 @@ export async function recordBatchHandoverSalesInTransaction(
     }
   });
 
-  if (!batchIds.size) {
-    for (const { ref } of recordableFulfilments) {
-      transaction.update(ref, { soldQuantityRecordedAt: serverTimestamp(), soldQuantityRecordedByUid: uid, soldQuantityRecordedByEmail: email ?? "", updatedAt: serverTimestamp() });
-    }
-    return { updatedBatchIds: [] as string[], closedBatchIds: [] as string[] };
-  }
-
   const batchRefs = [...batchIds].map(id => doc(db, "growingBatches", id));
   const batchSnapshots = await Promise.all(batchRefs.map(ref => transaction.get(ref)));
   const latestBatches = new Map<string, GrowingBatch>();
@@ -874,6 +872,7 @@ export async function recordBatchHandoverSalesInTransaction(
     if (snapshot.exists()) latestBatches.set(snapshot.id, { id: snapshot.id, ...(snapshot.data() as Omit<GrowingBatch, "id">) });
   });
 
+  const batchUpdates: { ref: DocumentReference; updatedItems: GrowingBatchItem[]; close: boolean }[] = [];
   const updatedBatchIds: string[] = [];
   const closedBatchIds: string[] = [];
 
@@ -887,9 +886,35 @@ export async function recordBatchHandoverSalesInTransaction(
     });
     updatedBatchIds.push(batchId);
     // Closure is decided only after the sold quantities above are applied, against harvested quantity.
-    if (canAutoCloseBatch(updatedItems)) {
-      transaction.update(doc(db, "growingBatches", batchId), {
-        items: updatedItems.map(item => item.status === "completed_harvested" ? { ...item, batchStockGrams: 0 } : item),
+    const close = canAutoCloseBatch(updatedItems);
+    batchUpdates.push({
+      ref: doc(db, "growingBatches", batchId),
+      updatedItems: close
+        ? updatedItems.map(item => item.status === "completed_harvested" ? { ...item, batchStockGrams: 0 } : item)
+        : updatedItems,
+      close,
+    });
+    if (close) closedBatchIds.push(batchId);
+  }
+
+  return {
+    batchUpdates,
+    fulfilmentRefsToMark: recordableFulfilments.map(({ ref }) => ref),
+    updatedBatchIds,
+    closedBatchIds,
+  };
+}
+
+export function applyBatchHandoverSalesInTransaction(
+  transaction: Transaction,
+  plan: Awaited<ReturnType<typeof prepareBatchHandoverSalesInTransaction>>,
+  uid: string,
+  email?: string,
+) {
+  for (const { ref, updatedItems, close } of plan.batchUpdates) {
+    if (close) {
+      transaction.update(ref, {
+        items: updatedItems,
         status: "closed" as GrowingBatchStatus,
         stockAdjusted: true,
         stockAdjustedAt: serverTimestamp(),
@@ -900,13 +925,12 @@ export async function recordBatchHandoverSalesInTransaction(
         closedByEmail: email ?? "",
         updatedAt: serverTimestamp(),
       });
-      closedBatchIds.push(batchId);
     } else {
-      transaction.update(doc(db, "growingBatches", batchId), { items: updatedItems, updatedAt: serverTimestamp() });
+      transaction.update(ref, { items: updatedItems, updatedAt: serverTimestamp() });
     }
   }
 
-  for (const { ref } of recordableFulfilments) {
+  for (const ref of plan.fulfilmentRefsToMark) {
     transaction.update(ref, {
       soldQuantityRecordedAt: serverTimestamp(),
       soldQuantityRecordedByUid: uid,
@@ -915,7 +939,20 @@ export async function recordBatchHandoverSalesInTransaction(
     });
   }
 
-  return { updatedBatchIds, closedBatchIds };
+  return {
+    updatedBatchIds: plan.updatedBatchIds,
+    closedBatchIds: plan.closedBatchIds,
+  };
+}
+
+export async function recordBatchHandoverSalesInTransaction(
+  transaction: Transaction,
+  fulfilmentRefs: DocumentReference[],
+  uid: string,
+  email?: string,
+) {
+  const plan = await prepareBatchHandoverSalesInTransaction(transaction, fulfilmentRefs);
+  return applyBatchHandoverSalesInTransaction(transaction, plan, uid, email);
 }
 
 export async function recordBatchHandoverSales(

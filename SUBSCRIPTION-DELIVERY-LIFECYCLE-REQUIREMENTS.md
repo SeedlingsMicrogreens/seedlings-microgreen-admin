@@ -1,11 +1,11 @@
 # Admin Subscription Completion Synchronization
 
-**Status: Draft for approval — Phase 1 analysis only**
+**Status: Approved and implemented in Admin (2026-10-22)**
 
-This document records the existing Admin delivery-completion behavior and the
-smallest intended correction for a later implementation. No application
-behavior is changed by this draft. Implementation must wait for explicit
-approval.
+This document records the Admin delivery-completion behavior. The "Verified
+Admin baseline" section describes the code as it was before the approved
+correction; "Intended behavior" is now implemented (see "Implementation
+notes").
 
 ## Scope
 
@@ -104,6 +104,42 @@ approval.
 - Firestore security rules allow the Admin roles to read/write
   `subscriptions`, `subscriptionDeliveries`, `orders`, `deliveryAssignments`,
   and `fulfilments`. See `firestore.rules`.
+
+### Scheduled delivery dates
+
+- Subscription delivery dates (`startDate`, `nextDeliveryDate`, `endDate`,
+  `scheduledDeliveryDate`, `deliveryDate`, `lastDeliveryDate`) are stored as
+  `YYYY-MM-DD` calendar dates with no time of day or time zone.
+- **Business rule: every subscription delivery is on a Saturday.** The Admin
+  create form no longer offers other days; new subscriptions store
+  `deliveryDay: 6` (`SUBSCRIPTION_DELIVERY_DAY`).
+- The first delivery is the first Saturday strictly after the start date,
+  taken from the administrator's local calendar date.
+- Each later delivery is the first Saturday strictly after the previous
+  scheduled delivery date. When the previous date is a Saturday this is
+  exactly seven calendar days later. A previously stored non-Saturday date
+  (for example a Friday written by the earlier IST bug) is left unchanged, and
+  the following delivery is scheduled on the next Saturday after it. Dates are
+  never derived from the order creation date or the current date.
+- All date arithmetic uses the shared helpers in `lib/calendarDate.ts`, which
+  never round-trip through local time and `toISOString()`. In IST that
+  round trip moved every generated date back one day (24 Oct → 30 Oct →
+  5 Nov 2026 instead of 31 Oct → 7 Nov).
+
+### Implementation notes
+
+- `resolveSubscriptionDeliveryTransition()` in `lib/subscriptionCompletion.ts`
+  holds the transition rules; `updateSubscriptionDeliveryStatusInTransaction()`
+  applies them inside the existing delivery-assignment transaction.
+- The delivery record is located by its canonical ID
+  (`{subscriptionId}_{deliveryNumber}`) or, failing that, by `orderId`; it must
+  belong to the order's subscription. A missing subscription or delivery record
+  now fails the update with a clear error instead of being skipped.
+- `totalDeliveries = 0` on a `weekly` subscription means ongoing (existing
+  creation behavior) and never completes; any other non-positive or
+  non-integer total fails a Delivered update.
+- Repeating Delivered on an already delivered occurrence changes nothing
+  except completing a parent whose saved count already reached the total.
 
 ## Website integration boundary
 
