@@ -6,7 +6,7 @@ const groups=[
   ["Hero Slider","Manage homepage banner images, slide text and buttons","/cms/banners","images"],
  ]},
  {title:"Website Pages",items:[
-  ["Website Pages","Predefined Microgreens and Contact page content","/cms/pages","file-earmark-text"],
+  ["Website Pages","Microgreens, Contact, Terms & Conditions and Privacy Policy","/cms/pages","file-earmark-text"],
   ["Our Journey","Edit the content displayed on the Our Journey page","/cms/journey","signpost-2"],
   ["Seedlings Feedback","Feedback shown on the website Journey page","/cms/seedlings-feedback","chat-heart"],
  ]},

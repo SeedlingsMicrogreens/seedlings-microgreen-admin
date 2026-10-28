@@ -57,9 +57,11 @@ export const menuItems: MenuNode[] = [
         text: "Website Pages",
         icon: "bi-file-earmark-text",
         children: [
-          { type: "item", text: "Microgreens", href: "/cms/pages", icon: "bi-flower1" },
+          { type: "item", text: "Microgreens", href: "/cms/pages?page=microgreens", icon: "bi-flower1" },
           { type: "item", text: "Our Journey", href: "/cms/journey", icon: "bi-signpost-2" },
-          { type: "item", text: "Contact", href: "/cms/pages", icon: "bi-envelope" },
+          { type: "item", text: "Contact", href: "/cms/pages?page=contact", icon: "bi-envelope" },
+          { type: "item", text: "Terms & Conditions", href: "/cms/pages?page=terms", icon: "bi-file-earmark-check" },
+          { type: "item", text: "Privacy Policy", href: "/cms/pages?page=privacy", icon: "bi-shield-lock" },
         ],
       },
       { type: "item", text: "Testimonials", href: "/cms/testimonials", icon: "bi-chat-quote" },

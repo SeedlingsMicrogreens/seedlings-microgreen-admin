@@ -18,6 +18,8 @@ const ITEMS=[
  {key:"footerBlog",label:"Blog",url:"/blog",location:"footer" as const},
  {key:"footerContact",label:"Contact",url:"/contact",location:"footer" as const},
  {key:"footerAccount",label:"My Account",url:"/account",location:"footer" as const},
+ {key:"footerTerms",label:"Terms & Conditions",url:"/terms-and-conditions",location:"footer" as const},
+ {key:"footerPrivacy",label:"Privacy Policy",url:"/privacy-policy",location:"footer" as const},
 ] as const;
 type Item={id:string;navKey:string;label:string;url:string;status:"draft"|"published"};
 export default function NavigationPage(){const[items,setItems]=useState<Item[]>([]),[drafts,setDrafts]=useState<Record<string,string>>({}),[error,setError]=useState("");
