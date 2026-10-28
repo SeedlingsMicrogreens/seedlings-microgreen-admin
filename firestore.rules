@@ -55,7 +55,7 @@ service cloud.firestore {
     match /cmsPages/{id} { allow read, write: if admin(); }
     match /cmsFaq/{id} { allow read, write: if admin(); }
     match /cmsTestimonials/{id} { allow read, write: if admin(); }
-    match /cmsBlogs/{id} { allow read, write: if admin(); }
+    match /cmsBlogs/{id} { allow read: if admin() || resource.data.status == "published"; allow write: if admin(); }
     match /cmsBanners/{id} { allow read, write: if admin(); }
     match /cmsNavigation/{id} { allow read, write: if admin(); }
     match /cmsSiteSettings/{id} { allow read, write: if admin(); }
@@ -117,8 +117,10 @@ service cloud.firestore {
     }
     match /auditEvents/{id} { allow read, write: if admin(); }
 
-    match /websiteTrustPoints/{id} { allow read, write: if admin(); }
+    match /websiteTrustPoints/{id} { allow read: if admin() || resource.data.status == "published"; allow write: if admin(); }
+    match /websiteHomepageContent/{id} { allow read: if admin() || resource.data.status == "published"; allow write: if admin(); }
     match /websiteJourneyContent/{id} { allow read, write: if admin(); }
+    match /websitePages/{id} { allow read: if admin() || resource.data.status == "published"; allow write: if admin(); }
     match /seedlingsFeedback/{id} { allow read, write: if admin(); }
     match /{document=**} { allow read, write: if false; }
   }
