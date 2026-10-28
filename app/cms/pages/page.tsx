@@ -6,8 +6,8 @@ import {showSuccess} from "@/lib/alerts";
 import {ImageUploader} from "@/components/ui/ImageUploader";
 
 const PAGES=[
- {key:"microgreens",label:"Microgreens",fields:[["eyebrow","Hero eyebrow"],["title","Hero heading"],["body","Hero description"],["imageUrl","Hero image URL"],["moodEyebrow","Shop by mood — eyebrow"],["moodTitle","Shop by mood — heading"],["everydayTitle","Everyday Greens — title"],["everydayText","Everyday Greens — description"],["colourTitle","Colourful Crunch — title"],["colourText","Colourful Crunch — description"],["chefTitle","Chef Favourites — title"],["chefText","Chef Favourites — description"]]},
- {key:"contact",label:"Contact",fields:[["eyebrow","Hero eyebrow"],["title","Hero heading"],["body","Hero description"],["callTitle","Call — title"],["callText","Call — display text"],["phone","Phone"],["emailTitle","Email — title"],["emailText","Email — display text"],["email","Email address"],["serviceTitle","Service — title"],["serviceText","Service — description"],["formIntro","Enquiry form introduction"]]},
+ {key:"microgreens",label:"Microgreens",fields:[["imageUrl","Banner image"],["imageAlt","Banner image alt text (describe the image, including any words in it)"],["eyebrow","Products section — eyebrow"],["title","Products section — heading"],["body","Products section — description"]]},
+ {key:"contact",label:"Contact",fields:[["title","Hero heading"],["body","Hero description"],["eyebrow","Contact section — eyebrow"],["sectionTitle","Contact section — heading"],["sectionText","Contact section — description"],["callTitle","Call — title"],["callText","Call — display text"],["phone","Phone (used for the call link)"],["emailTitle","Email — title"],["emailText","Email — display text"],["email","Email address (used for the email link)"],["serviceTitle","Service — title"],["serviceText","Service — description"],["formIntro","Enquiry form introduction"]]},
 ] as const;
 type PageKey=typeof PAGES[number]["key"];
 type Page={id:string;pageKey:PageKey;status:"draft"|"published";[key:string]:unknown};

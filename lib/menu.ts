@@ -50,7 +50,6 @@ export const menuItems: MenuNode[] = [
           { type: "item", text: "Trust Points", href: "/cms/homepage?section=trust", icon: "bi-shield-check" },
           { type: "item", text: "Our Promise", href: "/cms/homepage?section=promise", icon: "bi-heart" },
           { type: "item", text: "Why Choose Us", href: "/cms/homepage?section=why", icon: "bi-check-circle" },
-          { type: "item", text: "App Banner", href: "/cms/homepage?section=appBanner", icon: "bi-phone" },
         ],
       },
       {
@@ -66,7 +65,9 @@ export const menuItems: MenuNode[] = [
       { type: "item", text: "Testimonials", href: "/cms/testimonials", icon: "bi-chat-quote" },
       { type: "item", text: "Seedlings Feedback", href: "/cms/seedlings-feedback", icon: "bi-chat-heart" },
       { type: "item", text: "FAQ", href: "/cms/faq", icon: "bi-question-circle" },
+      { type: "item", text: "Blogs", href: "/cms/blogs", icon: "bi-journal-text" },
       { type: "item", text: "Navigation & Links", href: "/cms/navigation", icon: "bi-list" },
+      { type: "item", text: "Footer & App Links", href: "/cms/settings", icon: "bi-phone" },
     ],
   },
 
